@@ -31,6 +31,7 @@ python setup.py install
 
 ##### Tested on:
 - macOS Big Sur v11.1
+- Ubuntu 18.04.5 LTS
 
 ### Modules (sketch)
 - **models** - for all your modelling needs...
@@ -48,4 +49,4 @@ python setup.py install
 - Pierre Guilleminot (phg17@ic.ac.uk)
 - Mikolaj Kegler (mak616@ic.ac.uk)
 
-Last updated: 7th Jan 2021
+Last updated: 10th Jan 2021
