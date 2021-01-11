@@ -3,3 +3,5 @@
 *sPyEEG.egg-info*
 Data
 .vscode
+build
+dist

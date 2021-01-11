@@ -1,18 +1,17 @@
 """
 Setup file
 """
-from setuptools import setup
+import setuptools
 
 VERS = {}
 with open("./spyeeg/version.py") as fp:
     exec(fp.read(), VERS)
 
-setup(
-    name='sPyEEG',
+setuptools.setup(
+    name='spyeeg',
     version=VERS['__version__'],
-    packages=['spyeeg'],
-    url='',
-    license='',
+    packages=setuptools.find_packages(),
+    license='MIT',
     author='Pierre Guilleminot & Mikolaj Kegler',
     description='Package for modelling EEG responses to speech.'
 )
