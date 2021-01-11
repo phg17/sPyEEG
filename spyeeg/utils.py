@@ -366,7 +366,7 @@ def shift_array(arr, win=2, overlap=0, padding=False, axis=0):
             "As a workaround, please pad array beforehand...")
 
     if not _is_1d(arr):
-        if axis is not 0:
+        if axis != 0:
             arr = np.swapaxes(arr, 0, axis)
         return chunk_data(arr, win, overlap, padding)
 
