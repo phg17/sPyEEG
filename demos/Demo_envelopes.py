@@ -4,15 +4,14 @@ Demo showing how to use the envelope extration from spyeeg.feat module
 @author: mak616
 """
 
-import spyeeg
-import scipy.io.wavfile as wav
-import sys
 from os.path import join
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy.io.wavfile as wav
 plt.style.use('ggplot')
+import spyeeg
 
-# Load some sample audio data
+# Load sample audio data
 fs_audio, audio = wav.read('./Data/audio_sample.wav')
 fs_ds = 100  # Downsampling frequency in Hz
 
@@ -24,7 +23,7 @@ env_lp = spyeeg.feat.signal_envelope(audio, fs_audio, cutoff=8, resample=fs_ds)
 env_bp = spyeeg.feat.signal_envelope(
     audio, fs_audio, cutoff=[4, 8], resample=fs_ds)
 
-# Any other combination will lead to an error
+# Any other combination will produce an error
 try:
     env_bad = spyeeg.feat.signal_envelope(
         audio, fs_audio, cutoff=[1, 2, 3, 5], resample=fs_ds)
@@ -33,8 +32,8 @@ except ValueError as err:
 
 # Function accepts remaining keyword args from the mne.filter.create_filter
 # (https://mne.tools/dev/generated/mne.filter.create_filter.html) for more flexibility
-# In this example we enable verbosity (handy) and tune transition bands
-env_custom = spyeeg.feat.signal_envelope(audio, fs_audio, cutoff=[4, 8], resample=fs_ds, \
+# In this example we enable verbosity and tune transition bands
+env_custom = spyeeg.feat.signal_envelope(audio, fs_audio, cutoff=[4, 8], resample=fs_ds,
                                          verbose=True, l_trans_bandwidth=1, h_trans_bandwidth=1)
 
 # Plotting
@@ -51,4 +50,3 @@ ax[1].set_title('4-8 Hz bandpass')
 ax[2].set_title('4-8 Hz bandpass (custom - sharp)')
 f.tight_layout()
 plt.show()
-# f.savefig('Envs.pdf')
