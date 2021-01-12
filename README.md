@@ -40,13 +40,17 @@ python setup.py install
 - **preproc** - preprocessing...
 - **viz** - visualizations...
 - **utils** - misc.
+
 ### Examples
-**Note**: Sample data required for this demo can be downloaded [here](https://imperialcollegelondon.box.com/s/afalp7tysg6nlayb5hftyn5xopv6uh99). When downloaded place the files in the ```demos/Data``` folder.
-- **Basic usage**: ```demo/Demo_TRF.py```
+**Note**: Sample data required for demos can be downloaded [here](https://imperialcollegelondon.box.com/s/afalp7tysg6nlayb5hftyn5xopv6uh99). When downloaded place the files in the ```demos/Data``` folder.
+- **Modelling** (```models```)
+  - Basic TRF modelling: ```demo/Demo_TRF.py```
+- **Feature extraction** (```feat```)
+  - Speech envelope extraction: ```demo/Demo_envelopes.py```
 - coming soon...
 
 #### Contributors:
 - Pierre Guilleminot (phg17@ic.ac.uk)
 - Mikolaj Kegler (mak616@ic.ac.uk)
 
-Last updated: 10th Jan 2021
+Last updated: 12th Jan 2021
