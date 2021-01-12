@@ -10,14 +10,14 @@ Created on Thu Sep 10 12:21:04 2020
 import psutil
 import numpy as np
 from numpy.lib.stride_tricks import as_strided
-from scipy import signal as scisig
+from scipy import signal
 from sklearn.preprocessing import minmax_scale
 import pandas as pd
 import matplotlib.pyplot as plt
 
 
-def RMS(signal):
-    return np.sqrt(np.mean(np.power(signal, 2)))
+def RMS(x):
+    return np.sqrt(np.mean(np.power(x, 2)))
 
 
 def AddNoisePostNorm(Target, Noise, SNR, spacing=0):
@@ -154,7 +154,7 @@ def lag_sparse(times, srate=125):
     return np.asarray([int(np.ceil(t * srate)) for t in times])
 
 
-def fir_order(tbw, srate, atten=60, ripples=None):
+def fir_order(tbw, srate, atten=60., ripples=None):
     """Estimate FIR Type II filter order (order will be odd).
 
     If ripple is given will use rule:
@@ -202,84 +202,6 @@ def fir_order(tbw, srate, atten=60, ripples=None):
     return order + (order % 2-1)
 
 
-def signal_envelope(signal, srate, cutoff=20., method='hilbert', comp_factor=1./3, resample=1000):
-    """Compute the broadband envelope of the input signal.
-    Several methods are available:
-
-        - Hilbert -> abs -> low-pass (-> resample)
-        - Rectify -> low-pass (-> resample)
-        - subenvelopes -> sum
-
-    The envelope can also be compressed by raising to a certain power factor.
-
-    Parameters
-    ----------
-    signal : ndarray (nsamples,)
-        1-dimensional input signal
-    srate : float
-        Original sampling rate of the signal
-    cutoff : float (default 20Hz)
-        Cutoff frequency (transition will be 10 Hz)
-        In Hz
-    method : str {'hilbert', 'rectify', 'subs'}
-        Method to be used
-    comp_factor : float (default 1/3)
-        Compression factor (final envelope = env**comp_factor)
-    resample : float (default 125Hz)
-        New sampling rate of envelope (must be 2*cutoff < .. <= srate)
-        Explicitly set to False or None to skip resampling
-
-    Returns
-    -------
-    env : ndarray (nsamples_env,)
-        Envelope
-
-    """
-    print("Computing envelope...")
-    if method.lower() == 'subs':
-        raise NotImplementedError
-    else:
-        if method.lower() == 'hilbert':
-            # Get modulus of hilbert transform
-            out = abs(scisig.hilbert(signal))
-        elif method.lower() == 'rectify':
-            # Rectify signal
-            out = abs(signal)
-        else:
-            raise ValueError(
-                "Method can only be 'hilbert', 'rectify' or 'subs'.")
-
-        # Non linear compression before filtering to avoid NaN
-        out = np.power(out + np.finfo(float).eps, comp_factor)
-        # Design low-pass filter
-        # + 1 -> using odd ntaps for Type I filter,
-        ntaps = fir_order(10, srate, ripples=1e-3)
-        # so I have an integer group delay (instead of half)
-        b = scisig.firwin(ntaps, cutoff, fs=srate)
-        # Filter with convolution
-        out = scisig.convolve(np.pad(out, (len(b) // 2, len(b) // 2), mode='edge'),
-                              b, mode='valid')
-        # out = scisig.filtfilt(b, [1.0], signal) # This attenuates twice as much
-        # out = scisig.lfilter(b, [1.0], pad(signal, (0, len(b)//2), mode=edge))[len(b)//2:]  # slower than scipy.signal.convolve method
-
-        # Resample
-        if resample:
-            if not 2*cutoff < resample <= srate:
-                raise ValueError(
-                    "Chose resampling rate more carefully, must be > %.1f Hz" % (cutoff))
-            if srate//resample == srate/resample:
-                env = scisig.resample_poly(out, 1, srate//resample)
-            else:
-                dur = (len(signal)-1)/srate
-                new_n = int(np.ceil(resample * dur))
-                env = scisig.resample(out, new_n)
-        else:
-            env = out
-
-    # Scale output between 0 and 1:
-    return minmax_scale(env)
-
-
 def _is_1d(arr):
     "Short utility function to check if an array is vector-like"
     return np.product(arr.shape) == max(arr.shape)
@@ -287,7 +209,6 @@ def _is_1d(arr):
 
 def is_pos_def(A):
     """Check if matrix is positive definite
-
     Ref: https://stackoverflow.com/a/44287862/5303618
     """
     if np.array_equal(A, A.conj().T):
@@ -302,6 +223,16 @@ def is_pos_def(A):
 
 def rolling_func(func, data, winsize=2, overlap=1, padding=True):
     """Apply a function on a rolling window on the data
+
+    Args:
+        func ([type]): [description]
+        data ([type]): [description]
+        winsize (int, optional): [description]. Defaults to 2.
+        overlap (int, optional): [description]. Defaults to 1.
+        padding (bool, optional): [description]. Defaults to True.
+
+    Returns:
+        [type]: [description]
     """
     # TODO: check when Parallel()(delayed(func)(x) for x in rolled_array)
     # becomes advantageous, because for now it seemed actually slower...
@@ -310,8 +241,16 @@ def rolling_func(func, data, winsize=2, overlap=1, padding=True):
 
 
 def moving_average(data, winsize=2):
-    """#TODO: pad before calling chunk_data?
+    """TODO
+
+    Args:
+        data ([type]): [description]
+        winsize (int, optional): [description]. Defaults to 2.
+
+    Returns:
+        [type]: [description]
     """
+    # TODO: pad before calling chunk_data?
     return chunk_data(data, window_size=winsize, overlap_size=(winsize-1)).mean(1)
 
 
@@ -480,10 +419,20 @@ def mem_check(units='Gb'):
 
 
 def lag_finder(y1, y2, Fs):
+    """TODO
+
+    Args:
+        y1 ([type]): [description]
+        y2 ([type]): [description]
+        Fs ([type]): [description]
+
+    Returns:
+        [type]: [description]
+    """
     n = len(y1)
 
-    corr = scisig.correlate(y2, y1, mode='same') / np.sqrt(scisig.correlate(
-        y1, y1, mode='same')[int(n/2)] * scisig.correlate(y2, y2, mode='same')[int(n/2)])
+    corr = signal.correlate(y2, y1, mode='same') / np.sqrt(signal.correlate(
+        y1, y1, mode='same')[int(n/2)] * signal.correlate(y2, y2, mode='same')[int(n/2)])
 
     delay_arr = np.linspace(-0.5*n/Fs, 0.5*n/Fs, n)
     delay = delay_arr[np.argmax(corr)]
@@ -500,13 +449,30 @@ def get_timing(spikes):
     return timing
 
 
-def compression_eeg(signal, comp_fact=1):
-    sign = np.sign(signal)
-    value = np.abs(signal)**comp_fact
+def compression_eeg(x, comp_fact=1):
+    """TODO
+
+    Args:
+        x ([type]): [description]
+        comp_fact (int, optional): [description]. Defaults to 1.
+
+    Returns:
+        [type]: [description]
+    """
+    sign = np.sign(x)
+    value = np.abs(x)**comp_fact
     return np.multiply(sign, value)
 
 
 def create_events(dirac):
+    """TODO
+
+    Args:
+        dirac ([type]): [description]
+
+    Returns:
+        [type]: [description]
+    """
     timing = get_timing(dirac)
     events = np.zeros([len(timing), 3])
     events[:, 2] += 1

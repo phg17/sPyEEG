@@ -20,7 +20,8 @@ from scipy.io import loadmat, savemat
 from scipy.io.wavfile import read as wavread
 import os.path as ospath
 #import utils
-from .utils import lag_finder, AddNoisePostNorm, signal_envelope, create_events
+from .utils import lag_finder, AddNoisePostNorm, create_events
+from .feat import signal_envelope
 from sklearn.preprocessing import scale
 import matplotlib.pyplot as plt
 # MNE:
