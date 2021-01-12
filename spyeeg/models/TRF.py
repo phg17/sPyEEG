@@ -245,7 +245,7 @@ class TRFEstimator(BaseEstimator):
 
         return self
 
-    def fit_direct_cov(self, XXcov=None, XYcov=None, lagged=False, drop=True, overwrite=True, part_length=150., clear_after=True):
+    def fit_direct_cov(self, XXcov=None, XYcov=None, clear_after=True):
 
         self.XtX_ = XXcov
         self.XtY_ = XYcov
@@ -396,7 +396,7 @@ class TRFEstimator(BaseEstimator):
             return np.stack([_rmse_multifeat(yhat[..., a], ytrue) for a in range(len(self.alpha))], axis=-1)
         else:
             raise NotImplementedError(
-                "Only correlation score is valid for now...")
+                "Only correlation & RMSE scores are valid for now...")
 
     def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="corr", segment_length=None, fit_mode='direct', verbose=True):
         '''
