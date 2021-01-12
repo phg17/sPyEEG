@@ -101,7 +101,7 @@ def filter_signal(x, srate, cutoff, resample=None, rescale=None, **fir_kwargs):
     return x
 
 
-def signal_envelope(x, srate, cutoff=20., resample=None, method='hilbert', comp_factor=1., rescale=None, **fir_kwargs):
+def signal_envelope(x, srate, cutoff=20., resample=None, method='hilbert', comp_factor=1., rescale=None, verbose=False, **fir_kwargs):
     """Extraction of the signal envelope. + filtering and resampling.
     Args:
         x (nd array): Signal as a vector (or array - experimental).
@@ -149,6 +149,6 @@ def signal_envelope(x, srate, cutoff=20., resample=None, method='hilbert', comp_
     out = np.power(out + np.finfo(float).eps, comp_factor)
 
     # Filtering, resampling
-    env = filter_signal(out, srate, cutoff, resample, rescale, **fir_kwargs)
+    env = filter_signal(out, srate, cutoff, resample, rescale, verbose=verbose, **fir_kwargs)
 
     return env
