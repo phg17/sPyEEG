@@ -2,7 +2,9 @@
 
 #### Version: 0.0.1
 
-Package for modelling EEG responses to speech.
+Package for modelling EEG responses to speech. In other words, for mapping speech, through python (*sPyeech*) to EEG (*sPyEEG*)... and the other way around! 
+
+Not *mind-reading* for espionage purposes ;).
 
 ### Setup
 
