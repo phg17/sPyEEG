@@ -36,18 +36,19 @@ def fast_hilbert(x, axis=0):
     return x.squeeze()
 
 
-def filter_signal(x, srate, cutoff, resample=None, rescale=None, **fir_kwargs):
+def filter_signal(x, srate, cutoff=None, resample=None, rescale=None, **fir_kwargs):
     """Filtering & resampling of a signal through mne create filter function.
     Args:
         x (nd array): Signal as a vector (or array - experimental).
         srate (float): Sampling rate of the signal x in Hz.
-        cutoff (float | 2-element list-like): Cutoff frequencies (in Hz).
-        resample (float, optional): Sampling rate of the resampled signal in Hz. 
+        cutoff (float | 2-element list-like, optional): Cutoff frequencies (in Hz).
+            If None: no filtering. Default to None.
+        resample (float, optional): Sampling rate of the resampled signal in Hz.
             If None, no resampling. Defaults to None.
-        rescale (2 element tuple of floats, optional): Mix-max rescale the signal to the given range. 
+        rescale (2 element tuple of floats, optional): Mix-max rescale the signal to the given range.
             If None, no rescaling. Defaults to None.
-        fir_kwargs (optional) - arguments of the mne.filter.create_filter 
-        (https://mne.tools/dev/generated/mne.filter.create_filter.html)
+        fir_kwargs (optional) - arguments of the mne.filter.create_filter
+        (https://mne.tools/dev/generated/mne.filter.create_filter.html).
     Raises:
         ValueError: Incorrect formatting of input arguments.
         ValueError: Overlap of cutoff frequencies and resmapling freq.
@@ -57,30 +58,33 @@ def filter_signal(x, srate, cutoff, resample=None, rescale=None, **fir_kwargs):
     Example use:
         - Filter audio track to estimate fundamental waveforms for modelling ABR responses.
     """
-    if np.isscalar(cutoff):
-        l_freq = None
-        h_freq = cutoff
-    elif len(cutoff) == 2:
-        l_freq, h_freq = cutoff
+    if cutoff:
+        if np.isscalar(cutoff):
+            l_freq = None
+            h_freq = cutoff
+        elif len(cutoff) == 2:
+            l_freq, h_freq = cutoff
+        else:
+            raise ValueError(
+                "Cutoffs need to be scalar (for low-pass) or 2-element vector (for bandpass).")
+
+        f_nyq = 2*h_freq
+
+        # Design filter
+        fir_coefs = mne.filter.create_filter(
+            data=x,  # data is only used for sanity checking, not strictly needed
+            sfreq=srate,  # sfreq of your data in Hz
+            l_freq=l_freq,
+            h_freq=h_freq,  # assuming a lowpass of 40 Hz
+            method='fir',
+            fir_design='firwin',
+            **fir_kwargs)
+
+        # Pad & convolve
+        x = np.pad(x, (len(fir_coefs) // 2, len(fir_coefs) // 2), mode='edge')
+        x = signal.convolve(x, fir_coefs, mode='valid')
     else:
-        raise ValueError(
-            "Cutoffs need to be scalar (for low-pass) or 2-element vector (for bandpass).")
-
-    f_nyq = 2*h_freq
-
-    # Design filter
-    fir_coefs = mne.filter.create_filter(
-        data=x,  # data is only used for sanity checking, not strictly needed
-        sfreq=srate,  # sfreq of your data in Hz
-        l_freq=l_freq,
-        h_freq=h_freq,  # assuming a lowpass of 40 Hz
-        method='fir',
-        fir_design='firwin',
-        **fir_kwargs)
-
-    # Pad & convolve
-    x = np.pad(x, (len(fir_coefs) // 2, len(fir_coefs) // 2), mode='edge')
-    x = signal.convolve(x, fir_coefs, mode='valid')
+        f_nyq = 0
 
     # Resample
     if resample:
@@ -107,17 +111,17 @@ def signal_envelope(x, srate, cutoff=20., resample=None, method='hilbert', comp_
         x (nd array): Signal as a vector (or array - experimental).
         srate (float): Sampling rate of the signal x in Hz.
         cutoff (float | 2-element list-like, optional): Cutoff frequencies (in Hz). Defaults to 20..
-        resample (float, optional): Sampling rate of the resampled signal in Hz. 
+        resample (float, optional): Sampling rate of the resampled signal in Hz.
             If None, no resampling. Defaults to None.
-        method (str, optional): Method for extracting the envelope. 
+        method (str, optional): Method for extracting the envelope.
             Options:
                 - hilbert - hilbert transform + abs.
                 - rectify - full wave rectification.
             Defaults to 'hilbert'.
         comp_factor (float, optional): Compression factor of the envelope. Defaults to 1..
-        rescale (2 element tuple of floats, optional): Mix-max rescale the signal to the given range. 
+        rescale (2 element tuple of floats, optional): Mix-max rescale the signal to the given range.
             If None, no rescaling. Defaults to None.
-        fir_kwargs (optional) - arguments of the mne.filter.create_filter 
+        fir_kwargs (optional) - arguments of the mne.filter.create_filter
         (https://mne.tools/dev/generated/mne.filter.create_filter.html)
 
     Raises:
@@ -149,6 +153,16 @@ def signal_envelope(x, srate, cutoff=20., resample=None, method='hilbert', comp_
     out = np.power(out + np.finfo(float).eps, comp_factor)
 
     # Filtering, resampling
-    env = filter_signal(out, srate, cutoff, resample, rescale, verbose=verbose, **fir_kwargs)
+    env = filter_signal(out, srate, cutoff, resample,
+                        rescale, verbose=verbose, **fir_kwargs)
 
     return env
+
+
+def estimate_fundamental(x):
+    """Fundamental waveform estimation by 'eyeballing' right bandpass filter.
+    This time base it on praat pitch tracking to obtain pitch distribution.
+    Use filter signal...
+    TODO
+    """
+    raise NotImplementedError
