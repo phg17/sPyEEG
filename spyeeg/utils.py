@@ -15,6 +15,17 @@ from sklearn.preprocessing import minmax_scale
 import pandas as pd
 import matplotlib.pyplot as plt
 
+def audio_to_float(audio):
+    """Simple remapping of soundfiles in PCM int to float
+    Args:
+        audio (1D array): sound (PCM int)
+    Returns:
+        audio (1D array): sound (PCM float)
+    """
+    iinfo = np.iinfo(audio.dtype)
+    max_val = max(abs(iinfo.min), abs(iinfo.max))
+    audio = audio/max_val
+    return audio
 
 def RMS(x):
     return np.sqrt(np.mean(np.power(x, 2)))
