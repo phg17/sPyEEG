@@ -1,4 +1,4 @@
-name: spyeeg
+name: spyeeg_test
 channels:
 - conda-forge
 dependencies:
@@ -39,3 +39,5 @@ dependencies:
 - mne
 - mffpy>=0.5.7
 - obspy
+- pip:
+  - praat-parselmouth

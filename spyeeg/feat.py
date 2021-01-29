@@ -7,6 +7,7 @@ Tools for feature extractions of signal for modelling.
 import numpy as np
 from scipy import signal, fftpack
 from sklearn.preprocessing import minmax_scale
+import parselmouth as pm
 import mne
 
 
@@ -45,7 +46,7 @@ def filter_signal(x, srate, cutoff=None, resample=None, rescale=None, **fir_kwar
             If None: no filtering. Default to None.
         resample (float, optional): Sampling rate of the resampled signal in Hz.
             If None, no resampling. Defaults to None.
-        rescale (2 element tuple of floats, optional): Mix-max rescale the signal to the given range.
+        rescale ((float, float), optional): Mix-max rescale the signal to the given range.
             If None, no rescaling. Defaults to None.
         fir_kwargs (optional) - arguments of the mne.filter.create_filter
         (https://mne.tools/dev/generated/mne.filter.create_filter.html).
@@ -69,6 +70,9 @@ def filter_signal(x, srate, cutoff=None, resample=None, rescale=None, **fir_kwar
                 "Cutoffs need to be scalar (for low-pass) or 2-element vector (for bandpass).")
 
         f_nyq = 2*h_freq
+
+        if not isinstance(x, float):
+            x = x.astype(float)
 
         # Design filter
         fir_coefs = mne.filter.create_filter(
@@ -159,10 +163,62 @@ def signal_envelope(x, srate, cutoff=20., resample=None, method='hilbert', comp_
     return env
 
 
-def estimate_fundamental(x):
-    """Fundamental waveform estimation by 'eyeballing' right bandpass filter.
-    This time base it on praat pitch tracking to obtain pitch distribution.
-    Use filter signal...
-    TODO
+def signal_pitch(audio=None, srate=44100, path=None, f0_range=(50, 400), timestep=0.01, get_obj=False):
+    """Estimate signal's pitch via parselmouth. Note: it's better to use original/unprocessed audio.
+    Args:
+        audio (1D array, optional): Speech signal. Defaults to None.
+        srate (int, optional): Sampling rate of the audio file. Defaults to 44100.
+        path (string, optional): Path to audio file. Defaults to None.
+        f0 range ((float, float), optional): (minimal, maximal) pitch frequency (in Hz).
+            Defaults to (50,400) Hz.
+            Note: increasing the range slows down the method.
+        timestep (float, optional): Frame size for the pitch extractor (in s). Defaults to 0.01 s.
+            Note: decreasing the timestep slows down the method.
+        get_obj (bool, optjonal): Return PM pitch object for further manipulation
+    Returns:
+        f0 (1D array): f0 frequency evolution across the recording with timestep defined above.
+        pitch (pm Pitch instance): PM pitch object.
     """
-    raise NotImplementedError
+    if audio is None:
+        snd = pm.Sound(path)
+    else:
+        snd = pm.Sound(audio, srate)
+
+    pitch = snd.to_pitch(
+        pitch_floor=f0_range[0], pitch_ceiling=f0_range[1], time_step=timestep)
+    f0 = pitch.selected_array['frequency'].squeeze()
+    if get_obj:
+        return f0, pitch
+    else:
+        return f0
+
+
+def signal_f0wav(audio, srate, cutoff='auto', alpha=0.05, resample=None, **filter_kwargs):
+    """Simple estimator of fundamental waveform (f0wav).
+
+    Args:
+        audio (1D array): Audio signal.
+        srate (int): Sampling rate of the audio signal (in Hz).
+        cutoff (str | float | array_like, optional): Cutoff frequencies of the filter.
+            If 'auto' the cutoffs will be estimated from the pitch distribution as alpha
+            and 1-alpha percentiles. Defaults to 'auto'.
+        alpha (float, optional): Percentile of pitch used for picking cutoffs. Defaults to 0.05.
+        resample (float, optional): Sampling rate of the resampled signal in Hz.
+            If None, no resampling. Defaults to None.
+        filter_kwargs (optional) - optional extra keyword args for filter_signal.
+    Returns:
+        f0wav (1D array): Estimated fundamental waveform.
+    """
+    f0 = signal_pitch(audio, srate)
+
+    if isinstance(cutoff, str):
+        if cutoff == 'auto':
+            f0 = f0[f0 > 0]
+            f0 = sorted(f0)
+            lcut = f0[int(len(f0)*alpha)]
+            hcut = f0[int(len(f0)*(1-alpha))]
+            cutoff = [lcut, hcut]
+
+    f0wav = filter_signal(audio, srate, cutoff, resample, **filter_kwargs)
+
+    return f0wav
