@@ -10,7 +10,7 @@ from os.path import join
 import mne
 
 path_data = './Data'
-Fs = 256
+Fs = 200
 
 
 def get_raw_info():
