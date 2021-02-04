@@ -1,4 +1,4 @@
-name: spyeeg_test
+name: spyeeg
 channels:
 - conda-forge
 dependencies:
