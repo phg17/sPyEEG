@@ -25,16 +25,14 @@ def arr2joint(trf, times, eeg_info, ylabel=None, show=True, **kwargs):
         eeg_info (mne eeg_info object): eeg_info instance.
         ylabel (str, optional): label of y axis (convenient for visualization of TRFs).
             Defaults to None (default mne label).
-        **kwargs: keyword args for plot_joint (see docs for details).
+        **kwargs: keyword args for plot_joint (see docs for details). For example show=True/False...
     Returns:
         f: matplotlib figure
     """
     trf_viz = mne.EvokedArray(trf.T, eeg_info, tmin=times[0])
-    f = trf_viz.plot_joint(**kwargs, show=False)
+    f = trf_viz.plot_joint(**kwargs)
     if ylabel:
         f.get_axes()[0].set_ylabel(ylabel)
-    if show:
-        plt.show(f)
     return f
 
 
