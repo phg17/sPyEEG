@@ -12,6 +12,10 @@ from scipy import linalg
 import mne
 from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat
 
+# Memory cap (i.e. max usage).
+# By default set to 90% to prevent bricking machines in corner cases...
+MEM_CAP = 0.9
+
 
 class TRFEstimator(BaseEstimator):
 
@@ -95,7 +99,7 @@ class TRFEstimator(BaseEstimator):
             y) == 3 else y.nbytes
         estimated_mem_usage = X.nbytes * \
             (len(self.lags) if not lagged else 1) + y_memory
-        if estimated_mem_usage/1024.**3 > mem_check():
+        if estimated_mem_usage/1024.**3 > MEM_CAP*mem_check():
             raise MemoryError("Not enough RAM available! (needed %.1fGB, but only %.1fGB available)" % (
                 estimated_mem_usage/1024.**3, mem_check()))
 
