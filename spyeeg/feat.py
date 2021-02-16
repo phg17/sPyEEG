@@ -222,3 +222,22 @@ def signal_f0wav(audio, srate, cutoff='auto', alpha=0.05, resample=None, **filte
     f0wav = filter_signal(audio, srate, cutoff, resample, **filter_kwargs)
 
     return f0wav
+
+
+def signal_rectify(signal, mode='half'):
+    """Simple rectification method. 
+    Args:
+        signal (nd array): Signal to be rectified.
+        mode (str, optional): Rectification mode. Options:
+            - half - half wave rectification
+            - full - full wave rectification
+            Defaults to 'half'.
+    Returns:
+        [nd array]: Rectified signal.
+    """
+    if mode == 'full':
+        return np.abs(signal)
+    elif mode == 'half':
+        tmp = np.copy(signal)
+        tmp[tmp < 0] = 0
+        return tmp
