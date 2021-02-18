@@ -5,3 +5,4 @@ Data
 .vscode
 build
 dist
+*.ipynb_checkpoints*
