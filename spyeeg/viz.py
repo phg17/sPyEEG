@@ -30,9 +30,11 @@ def arr2joint(trf, times, eeg_info, ylabel=None, show=True, **kwargs):
         f: matplotlib figure
     """
     trf_viz = mne.EvokedArray(trf.T, eeg_info, tmin=times[0])
-    f = trf_viz.plot_joint(**kwargs)
+    f = trf_viz.plot_joint(show=False, **kwargs)
     if ylabel:
         f.get_axes()[0].set_ylabel(ylabel)
+    if show:
+        plt.show(f)
     return f
 
 
