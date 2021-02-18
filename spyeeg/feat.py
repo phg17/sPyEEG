@@ -28,13 +28,20 @@ def fast_hilbert(x, axis=0):
     # Add dimension if x is a vector
     if len(x.shape) == 1:
         x = x[:, np.newaxis]
+        vect = True
+    else:
+        vect = False
 
     fast_shape = np.array(
         [fftpack.helper.next_fast_len(x.shape[0]), x.shape[1]])
     x_padded = np.zeros(fast_shape)
     x_padded[:x.shape[0], :] = x
     x = signal.hilbert(x_padded, axis=axis)[:x.shape[0], :]
-    return x.squeeze()
+    
+    if vect:
+        return x.squeeze()
+    else:
+        return x
 
 
 def filter_signal(x, srate, cutoff=None, resample=None, rescale=None, **fir_kwargs):
