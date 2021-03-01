@@ -373,7 +373,7 @@ class TRFEstimator(BaseEstimator):
                 X = np.hstack([np.ones((len(X), 1)), X])
 
         # Do it for every alpha
-        pred = np.stack([X.dot(betas[:, :, :, i])
+        pred = np.stack([X.dot(betas[..., i])
                          for i in range(betas.shape[-1])], axis=-1)
 
         return pred  # Shape T x Nchan x Alpha
