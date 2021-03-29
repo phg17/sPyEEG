@@ -16,12 +16,12 @@ PROP_CYCLE = plt.rcParams['axes.prop_cycle']
 COLORS = PROP_CYCLE.by_key()['color']
 
 
-def arr2joint(trf, times, eeg_info, ylabel=None, show=True, **kwargs):
+def arr2joint(trf, tlags, eeg_info, ylabel=None, show=True, **kwargs):
     """Convenience function. Plot array as jointplot.
     plot_joint ref: https://mne.tools/stable/generated/mne.Evoked.html#mne.Evoked.plot_joint
     Args:
         trf (2D array): Array of model weights T x N size, where T - timelags, N - channels.
-        times (1D array): timelags (in seconds).
+        tlags (1D array): timelags (in seconds).
         eeg_info (mne eeg_info object): eeg_info instance.
         ylabel (str, optional): label of y axis (convenient for visualization of TRFs).
             Defaults to None (default mne label).
@@ -29,7 +29,7 @@ def arr2joint(trf, times, eeg_info, ylabel=None, show=True, **kwargs):
     Returns:
         f: matplotlib figure
     """
-    trf_viz = mne.EvokedArray(trf.T, eeg_info, tmin=times[0])
+    trf_viz = mne.EvokedArray(trf.T, eeg_info, tmin=tlags[0])
     f = trf_viz.plot_joint(show=False, **kwargs)
     if ylabel:
         f.get_axes()[0].set_ylabel(ylabel)
