@@ -14,6 +14,7 @@ from ..utils import lag_matrix, lag_span, lag_sparse, is_pos_def, find_knee_poin
 from ..preproc import create_filterbank, apply_filterbank
 from ..viz import topoplot_array
 from scipy import linalg
+from sklearn.cross_decomposition import CCA
 import mne
 
 def cca_nt(x, y, threshs, knee_point):
