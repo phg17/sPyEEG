@@ -89,3 +89,24 @@ def covariances(X, estimator='cov'):
     for i in range(Ntrials):
         covmats[i, :, :] = est(X[i, :, :])
     return covmats
+
+def create_filterbank(freqs, srate, filtertype=signal.cheby2, **kwargs):
+    """Creates a filter bank, by default of chebychev type 2 filters.
+    Parameters of filter are to be defined as name value pair arguments.
+    Frequency bands are defined with boundaries instead of center frequencies.
+    """
+    normalized_freqs = np.asarray(freqs)/(srate/2.) # create normalized frequencies specifications
+    return [filtertype(**kwargs, Wn=ff) for ff in normalized_freqs]
+
+def apply_filterbank(data, fbank, filt_func=signal.lfilter, n_jobs=-1, axis=-1):
+    """Applies a filterbank to a given multi-channel signal.
+    Parameters
+    ----------
+    data : ndarray (samples, nchannels)
+    fb : list
+        list of (b,a) tuples, where b and a specify a digital filter
+    Returns
+    -------
+    y : ndarray (nfilters, samples, nchannels)
+    """
+    return np.asarray(Parallel(n_jobs=n_jobs)(delayed(filt_func)(b, a, data, axis=axis) for b, a in fbank))

@@ -10,10 +10,276 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from mne.decoding import BaseEstimator
-from ..utils import lag_matrix, lag_span, lag_sparse
+from ..utils import lag_matrix, lag_span, lag_sparse, is_pos_def, find_knee_point
+from ..preproc import create_filterbank, apply_filterbank
+from ..viz import topoplot_array
 from scipy import linalg
+from sklearn.cross_decomposition import CCA
 import mne
 
+def cca_nt(x, y, threshs, knee_point):
+    # A, B: transform matrices
+    # R: r scores
+    # can normalise the data
+    m = x.shape[1]
+    # Build covariance matrix: C=[x,y]'*[x,y]
+
+    if isinstance(y, list):
+        n = y[0].shape[1]
+        print(m)
+        print(n)
+        C = np.zeros((m + n,m + n))
+        # create list of X for all y's
+        all_x = [x for i in range(len(y))]
+        x_cov = sum(list(map(lambda a,b: a.T @ b, all_x, all_x)))
+        y_cov = sum(list(map(lambda a,b: a.T @ b, y, y)))
+        xy_cov = sum(list(map(lambda a,b: a.T @ b, all_x, y)))
+        C[:m,:m] = x_cov
+        C[m:,m:] = y_cov
+        C[:m,m:] = xy_cov
+        C[m:,:m] = xy_cov.T
+    else:
+        C = np.concatenate([x, y], axis=1).T @ np.concatenate([x, y], axis=1)
+
+    # PCA on X.T X to get sphering matrix A1 and on Y.T*Y for A2
+    As = []
+    Eigvals = []
+    for idx, C_temp in enumerate([C[:m, :m], C[m:, m:]]):
+        Val, Vec = np.linalg.eigh(C_temp)               # get eigval & eigvec
+        if not is_pos_def(C_temp):
+            discard = np.argwhere(Val < 0)
+            if not len(discard) == 0:
+                Val = Val[max(discard)[0]+1:]
+                Vec = Vec[:,max(discard)[0]+1:]
+        Val, Vec = Val[::-1], Vec[:, ::-1]
+        if knee_point is not None:
+            find_knee_point()
+            print('knee_point used')
+        keep = np.cumsum(Val)/sum(Val) <= threshs[idx]   # only keep components over certain percentage of variance
+        topcs = Vec[:, keep]                        # corresponding vecs
+        Val = Val[keep]
+        exp = 1-1e-12
+        Val = Val**exp
+        As.append(topcs @ np.diag(np.sqrt(1/Val)))
+        Eigvals.append(Val)
+    A1, A2 = As
+    eigvals_x, eigvals_y = Eigvals
+
+    # create new C = Amix.T*C*Amix
+    AA = np.zeros((A1.shape[0] + A2.shape[0], A1.shape[1] + A2.shape[1]))
+    AA[:A1.shape[0], :A1.shape[1]] = A1
+    AA[A1.shape[0]:, A1.shape[1]:] = A2
+    C = AA.T @ C @ AA
+
+    N = np.min((np.size(A1,1), np.size(A2,1)))    # number of canonical components
+
+    # PCA on Cnew
+    Val, Vec = np.linalg.eigh(C)
+    Val, Vec = Val[::-1], Vec[:, ::-1]
+
+    A = A1 @ Vec[:np.size(A1,1),:N]*np.sqrt(2)      # keeping only N first PCs
+    B = A2 @ Vec[np.size(A1,1):,:N]*np.sqrt(2)
+    R = Val[:N] - 1
+
+    return A1, A2, A, B, R, eigvals_x, eigvals_y
+
+
+def cca_svd(x, y, opt={}):
+    """CCA by SVD.
+
+    Implements CCA between x and y with regularisation options as specified in
+    opt.
+
+    If y is a list of matrices, computes CCA between the concatenated
+    elements of y and a repeated version of x (generic model).
+
+    Parameters
+    ----------
+    x : ndarray (nsamples x ndims_x)
+        Multivariate data
+
+    y : ndarray (nsamples x ndims_y) or list of ndarray (all of the same shape)
+        Multivariate data
+
+    opt : dictionary
+        Regularisation options for x and y. opt['x'] and opt['y'] are
+        dictionaries containing options that will be used for their respective
+        PCA. See :func:`reg_eigen` for valid options.
+
+    Returns
+    -------
+    Ax, Ay : ndarrays (ndims_x x nCC and ndims_y x nCC)
+        Coefficients such that (y @ Ay).T @ (x @ Ax) is diagognal with the
+        largest correlation values possible on the diagonal.
+
+    R: ndarray
+        Correlation values between the projections of x and y (i.e.
+        R[i] = (y.T @ Ay[i]).T @ (x @ Ax[i]) )
+
+    Remark
+    -------
+    x and y are assumed to be zero-mean column-wise.
+
+    Example
+    -------
+    >>> x = np.random.randn(1000,10)
+    >>> y = np.random.randn(1000,8)
+    >>> opt = {'x': {'nKeep': 3}, 'y': {'var': 0.99}}
+    >>> Ax, Ay, R = myCCA.cca_svd(x, y, opt)
+
+    CCA between x and y, while keeping only 3 top PCs for x and dimensions
+    accounting for 99 % the total variance for y.
+    """
+
+    # TODO: if y is a list, add option to switch between generic model and
+    # one CCA per element of y?
+
+    # default input
+    if not 'x' in opt:
+        opt['x'] = {}
+
+    if not 'y' in opt:
+        opt['y'] = {}
+
+    # same as below with a for loop, curtesy of Hugo
+    #    S, V = {}, {}
+    #    for k, mat in zip(opt.keys(), [x, y]):
+    #        S[k] = regEigen(mat, opt[k])
+
+    # regularised PCA
+    S, V = reg_eigen(x,opt['x'])
+    O, N = reg_eigen(y,opt['y'])
+
+    S = 1 / np.sqrt(S)
+    O = 1 / np.sqrt(O)
+
+    if isinstance(y, list):
+        ytx = np.zeros((y[0].shape[1],x.shape[1]))
+        for m in y:
+            ytx += m.T @ x
+    else:
+        ytx = y.T @ x
+
+    # this does an SVD on C given by (matrix multiplications):
+    # C = diag(O) * N' * y' * x * V * diag(S)
+    P, Q, R = np.linalg.svd((O[:,np.newaxis] * N.T) @ ytx @ (V * S), full_matrices=False)
+
+    # P, Q, R = np.linalg.svd(X) such that: X = P * Q * R (and not R.T)
+    # hence R needs to be transposed below
+    # (singular values already sorted in descending order)
+    Ax = (V * S) @ R.T
+    Ay = (N * O) @ P
+
+    return Ax, Ay, Q
+
+
+def reg_eigen(x, opt={}):
+    """Regularised PCA.
+
+    Does an eigenvalue decompostion x' * x = V * S * V' and returns matrix V
+    and vector S sorted by decreasing eigenvalues and with some regularisation
+    as specfied in opt (reg_eigen will always discard at least degenerate
+    dimensions).
+
+    If x is a list of matrices, does the same on the summed covariance matrix
+    of its elements (i.e. PCA on the concatenated elements of x ; hence: all
+    elements must all have equal 2nd dimension).
+
+    Parameters
+    ----------
+    x : ndarray (nsamples x ndims) or list of ndarray  (all of the same shape)
+        Multivariate data
+
+    opt : dictionary
+        Regularisation options for x and y. Possible options:
+
+            key 'cond', val: float
+                Keep all eigenvalues e_i that verify:
+                    (max(eigen) / eigen_i) < opt['cond']
+            key 'nKeep', val: int
+                Number of eigenvalues to keep
+            key 'var', val : float
+                Fraction of the total variance to keep
+            key 'absTol', val : float
+                Discard eigenvalues smaller than absTol
+
+    Returns
+    -------
+    S : ndarray (nPC,)
+        Sorted eigenvalues (decreasing)
+
+    V : (ndims x nPC)
+        Rotation matrix (eigenvectors) -- sorted as S
+
+    Remark
+    -------
+    x and y are assumed to be zero-mean column-wise. regEigen does not apply
+    any normalisation.
+
+    Examples
+    -------
+    reg_eigen(x,{'cond': 1e6}) # keep eigenvals up to a condition number of 1e6
+    reg_eigen(x,{'nKeep': 10}) # keep the 10 PCs with largest eigenvalues
+    reg_eigen(x,{'var': 0.99}) # keep 99 % of variance
+    reg_eigen(x,{'absTol': 1e-6}) # discard dimension with variance < 1e-6
+    """
+
+    # TODO: add checks on input validity?
+
+    if isinstance(x, list):
+        xtx = np.zeros((x[0].shape[1],x[0].shape[1]))
+        for m in x:
+            xtx += m.T @ m
+
+        S, V = np.linalg.eigh(xtx)
+
+    else:
+        S, V = np.linalg.eigh(x.T @ x)
+
+    # eigh sort eigenvalues in increasing order
+    # reorder in decreasing order
+    # NB: there may be (small) negative eigenvalues in the case of degenerate
+    # matrices, we'll discard these here
+    rx = np.sum(S < 0)
+    S = np.flip(S[rx:])
+    V = np.flip(V[:, rx:], 1)
+
+    # always remove (at least) numerical zeros by default
+    # same default tolerance as the one used to compute rank in
+    # np.linalg.matrix_rank
+    tol = S[0] * x.shape[1] * np.finfo(S.dtype).eps
+    rx = np.sum(S > tol) # keep the rx first elements
+
+    # regularisation:
+    # keep a custom number of dimensions
+    if opt:
+
+        # condition number
+        if 'cond' in opt:
+            # since all eigenvals are now > 0
+            rc = np.searchsorted(S[0] / S, opt['cond'])
+
+        # explicit number of dimensions to keep
+        elif 'nKeep' in opt:
+            rc = opt['nKeep']
+
+        # fraction of total variance
+        elif 'var' in opt:
+            rc = np.searchsorted(np.cumsum(S) / np.sum(S), opt['var'])
+
+        # absolute tolerance value
+        elif 'absTol' in opt:
+            rc = np.sum(S > opt['absTol'])
+
+        # TODO: add ridge regularisation?
+
+        rx = np.min((rx, rc))
+
+    # drop dimensions
+    V = V[:, :rx]
+    S = S[:rx]
+
+    return S,V
 
 class CCA_Estimator(BaseEstimator):
 
@@ -54,8 +320,8 @@ class CCA_Estimator(BaseEstimator):
 
         else:
             if tmin and tmax:
-                LOGGER.info(
-                    "Will use xlags spanning form tmin to tmax.\nTo use individual xlags, use the `times` argument...")
+                # LOGGER.info(
+                #     "Will use xlags spanning form tmin to tmax.\nTo use individual xlags, use the `times` argument...")
                 self.xlags = lag_span(tmin, tmax, srate=srate)[::-1]
                 self.xtimes = self.xlags[::-1] / srate
             else:
@@ -246,8 +512,9 @@ class CCA_Estimator(BaseEstimator):
         if sys.platform.startswith("win"):
             tmpdir = os.environ["TEMP"]
         else:
-            #tmpdir = os.environ["TMPDIR"]
-            tmpdir = '/home/phg17/Documents/Personal/EEG - Octave/Temporary'
+            os.environ["TMPDIR"] = './'
+            tmpdir = os.environ["TMPDIR"]
+            # tmpdir = '/home/phg17/Documents/Personal/EEG - Octave/Temporary'
         np.save(os.path.join(tmpdir, 'temp_X'), X)
         if isinstance(y, list):
             np.save(os.path.join(tmpdir, 'temp_y'), np.asarray(
@@ -321,7 +588,7 @@ class CCA_Estimator(BaseEstimator):
         topoplot_array(self.coefResponse_, pos, n_topos=n_comp, titles=titles)
         mne.viz.tight_layout()
 
-    def plot_corr(self, pos, n_comp=1):
+    def plot_corr(self, pos, n_comp=1, n_chan=64):
         """Plot the correlation between the EEG component waveform and the EEG channel waveform.
         Parameters
         ----------
@@ -335,11 +602,11 @@ class CCA_Estimator(BaseEstimator):
         coefStim_ = self.coefStim_.reshape(
             (self.coefStim_.shape[0] * self.coefStim_.shape[1], self.coefStim_.shape[2]))
 
-        r = np.zeros((64, n_comp))
+        r = np.zeros((n_chan, n_comp))
         for c in range(n_comp):
             eeg_proj = y @ self.coefResponse_[:, c]
             env_proj = all_x @ coefStim_[:, c]
-            for i in range(64):
+            for i in range(n_chan):
                 r[i, c] = np.corrcoef(y[:, i], eeg_proj)[0, 1]
             # cc_corr = np.corrcoef(eeg_proj, env_proj)[0,1]
 
