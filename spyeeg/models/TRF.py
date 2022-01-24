@@ -466,6 +466,7 @@ class TRFEstimator(BaseEstimator):
             if fit_mode.find('from_cov') > -1:
                 # Format 'from_cov_xxx' -> xxx - duration of a single part.
                 # The main idea is to chunk the data into bite-sized parts that will fit in the RAM
+                # Careful with the chunking of data
                 if len(fit_mode.split('_')) == 2:
                     part_lenght = 150
                 elif len(fit_mode.split('_')) == 3:
