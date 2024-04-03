@@ -7,7 +7,7 @@ Tools for feature extractions of signal for modelling.
 import numpy as np
 from scipy import signal, fftpack
 from sklearn.preprocessing import minmax_scale
-import parselmouth as pm
+#import parselmouth as pm
 import mne
 
 
@@ -186,6 +186,8 @@ def signal_pitch(audio=None, srate=44100, path=None, f0_range=(50, 400), timeste
         f0 (1D array): f0 frequency evolution across the recording with timestep defined above.
         pitch (pm Pitch instance): PM pitch object.
     """
+    return True
+    """
     if audio is None:
         snd = pm.Sound(path)
     else:
@@ -198,6 +200,7 @@ def signal_pitch(audio=None, srate=44100, path=None, f0_range=(50, 400), timeste
         return f0, pitch
     else:
         return f0
+    """
 
 
 def signal_f0wav(audio, srate, cutoff='auto', alpha=0.05, resample=None, **filter_kwargs):

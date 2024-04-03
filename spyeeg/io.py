@@ -28,68 +28,7 @@ import matplotlib.pyplot as plt
 import mne
 from mne.preprocessing.ica import ICA
 from mne.filter import detrend as detrend_data
-from obspy.signal.detrend import polynomial
 
-
-File_ref = dict()
-File_ref['al'] = ['al', 'al_2']
-File_ref['yr'] = ['yr', 'yr_2']
-File_ref['phil'] = ['phil_1', 'phil_2']
-File_ref['jon'] = ['jon', 'jon_2']
-File_ref['deb'] = ['deb', 'deb2']
-File_ref['chap'] = ['chap_1', 'chap_2']
-File_ref['alio'] = ['alio_1', 'alio_2']
-File_ref['sep'] = ['sep_1', 'sep_2']
-File_ref['lad'] = [['lad_1', 'lad_1_1'], 'lad_2']
-File_ref['calco'] = ['calco_1', 'calco_2']
-
-
-Conditions_EEG = dict()
-Conditions_EEG[0] = {'type': 'audio',
-                     'delay': 0, 'correlated': True}  # audio only
-Conditions_EEG[1] = {'type': 'tactile',
-                     'delay': 0, 'correlated': True}  # tactile only
-Conditions_EEG[2] = {'type': 'audio-tactile', 'delay': 60,
-                     'correlated': True}  # audio tactile -60 (late tactile)
-Conditions_EEG[3] = {'type': 'audio-tactile', 'delay': 0,
-                     'correlated': True}  # audio tactile 0 (sync advance)
-Conditions_EEG[4] = {'type': 'audio-tactile', 'delay': -60,
-                     'correlated': True}  # audio tactile 60 (tactile in advance)
-Conditions_EEG[5] = {'type': 'audio-tactile', 'delay': -120,
-                     'correlated': True}  # audio tactile 120 (tactile in advance)
-Conditions_EEG[6] = {'type': 'audio-tactile', 'delay': -180,
-                     'correlated': True}  # audio tactile 120 (tactile in advance)
-Conditions_EEG[7] = {'type': 'audio-tactile', 'delay': 0,
-                     'correlated': False}  # uncorrelated (tactile uncorrelated)
-
-Bad_trial = dict()
-Bad_trial['deb1'] = True
-
-Bad_Channels = dict()
-Bad_Channels['phil'] = [
-    ['CPz', 'FCz', 'FC6', 'AF3'], ['CPz', 'FCz', 'FC6', 'AF3']]
-Bad_Channels['al'] = [['CPz', 'FCz', 'FC6', 'AF3'],
-                      ['CPz', 'FCz', 'FC6', 'AF3']]
-Bad_Channels['yr'] = [['CPz', 'FCz', 'FC6', 'AF3'],
-                      ['CPz', 'FCz', 'FC6', 'AF3']]
-Bad_Channels['jon'] = [['CPz', 'FCz', 'FC6', 'AF3'],
-                       ['CPz', 'FCz', 'FC6', 'AF3']]
-Bad_Channels['deb'] = [['CPz', 'FCz', 'FC6', 'AF3'],
-                       ['CPz', 'FCz', 'FC6', 'AF3']]
-Bad_Channels['chap'] = [
-    ['CPz', 'FCz', 'FC6', 'AF3'], ['CPz', 'FCz', 'FC6', 'AF3']]
-Bad_Channels['alio'] = [
-    ['CPz', 'FCz', 'FC6', 'AF3'], ['CPz', 'FCz', 'FC6', 'AF3']]
-Bad_Channels['sep'] = [['CPz', 'FCz', 'FC6', 'AF3'],
-                       ['CPz', 'FCz', 'FC6', 'AF3']]
-Bad_Channels['lad'] = [['CPz', 'FCz', 'FC6', 'AF3'],
-                       ['CPz', 'FCz', 'FC6', 'AF3']]
-Bad_Channels['calco'] = [
-    ['CPz', 'FCz', 'FC6', 'AF3'], ['CPz', 'FCz', 'FC6', 'AF3']]
-
-path_behav = '/home/phg17/Documents/Behavioural Experiment/data/Behavioural_2'
-path_data = '/home/phg17/Documents/EEG Experiment/Data Analysis/Data'
-path_stimuli = '/home/phg17/Documents/EEG Experiment/Stimuli_Odin/Stimuli'
 
 
 def load_mat(fname):
