@@ -170,37 +170,6 @@ def signal_envelope(x, srate, cutoff=20., resample=None, method='hilbert', comp_
     return env
 
 
-def signal_pitch(audio=None, srate=44100, path=None, f0_range=(50, 400), timestep=0.01, get_obj=False):
-    """Estimate signal's pitch via parselmouth. Note: it's better to use original/unprocessed audio.
-    Args:
-        audio (1D array, optional): Speech signal. Defaults to None.
-        srate (int, optional): Sampling rate of the audio file. Defaults to 44100.
-        path (string, optional): Path to audio file. Defaults to None.
-        f0 range ((float, float), optional): (minimal, maximal) pitch frequency (in Hz).
-            Defaults to (50,400) Hz.
-            Note: increasing the range slows down the method.
-        timestep (float, optional): Frame size for the pitch extractor (in s). Defaults to 0.01 s.
-            Note: decreasing the timestep slows down the method.
-        get_obj (bool, optjonal): Return PM pitch object for further manipulation
-    Returns:
-        f0 (1D array): f0 frequency evolution across the recording with timestep defined above.
-        pitch (pm Pitch instance): PM pitch object.
-    """
-    return True
-    """
-    if audio is None:
-        snd = pm.Sound(path)
-    else:
-        snd = pm.Sound(audio, srate)
-
-    pitch = snd.to_pitch(
-        pitch_floor=f0_range[0], pitch_ceiling=f0_range[1], time_step=timestep)
-    f0 = pitch.selected_array['frequency'].squeeze()
-    if get_obj:
-        return f0, pitch
-    else:
-        return f0
-    """
 
 
 def signal_f0wav(audio, srate, cutoff='auto', alpha=0.05, resample=None, **filter_kwargs):
