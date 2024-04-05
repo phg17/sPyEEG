@@ -55,4 +55,4 @@ python setup.py install
 - Pierre Guilleminot (phg17@ic.ac.uk)
 - Mikolaj Kegler (mak616@ic.ac.uk)
 
-Last updated: 12th Jan 2021
+Last updated: 5th Apr 2024
