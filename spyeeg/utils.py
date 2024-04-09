@@ -489,3 +489,14 @@ def create_events(dirac):
     events[:, 2] += 1
     events[:, 0] = timing
     return events.astype(int)
+
+def center_weight(X,weight):
+    """
+    Center and weight the data
+    Args:
+        X (list): list of numpy arrays
+        weights (list): list 
+    """
+    meanX = [Xk.mean(0,keepdims=True) for Xk in  X]
+    X = [(Xk-mx)/w for Xk,mx,w in zip(X,meanX,weight)]
+    return X, meanX

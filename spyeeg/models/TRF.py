@@ -20,13 +20,39 @@ MEM_CAP = 0.9
 class TRFEstimator(BaseEstimator):
 
     def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., alpha=[0.], fit_intercept=False, mtype='forward'):
+        '''
+        This class implements the TRF model for s/M/EEG data.
+        times : mismatch a -> b, where a - dependent, b - predicted
+            Negative timelags indicate a lagging behind b
+            Positive timelags indicate b lagging behind a
+        tmin : float
+            Default: None
+            Minimum time lag (in seconds). Can be negative to check for lags in the past (~null model).
+        tmax : float
+            Default: None
+            Maximum time lag (in seconds). Can be large to check for lags in the future (~null model).
+        srate : float
+            Default: 1.
+            Sampling rate of the data.
+        alpha : list
+            Default: [0.]
+            Regularization parameter(s) for the model. If a list is provided, the model will be fitted for each alpha.
+            The fit is looping over alpha AFTER most matrix operations to optimize compute time. Careful, we weight matrices according to the
+            eigenvalues and this value of alpha is not directly equivalent to the one given in (XtX + alpha*I)XtY. Ideally, alpha should be computed for 
+            many values.
+        fit_intercept : bool
+            Default: False
+            Whether to fit an intercept term in the model.
+        mtype : str
+            Default: 'forward'
+            Forward or backward. Required for formatting coefficients in get_coef (convention: forward - stimulus -> eeg, backward - eeg - stimulus)
 
-        # Times reflect mismatch a -> b, where a - dependent, b - predicted
-        # Negative timelags indicate a lagging behind b
-        # Positive timelags indicate b lagging behind a
-        # For example:
-        # eeg -> env (tmin = -0.5, tmax = 0.1)
-        # Indicate timeframe from -100 ms (eeg precedes stimulus): 500 ms (eeg after stimulus)
+        TODO:
+            - Implement a method to compute alpha from the data (e.g. nested cross-validation) directly in the function
+            - Give the possibility to compute alphas for each feature separately and fit them.
+        
+        '''
+
         self.tmin = tmin
         self.tmax = tmax
         self.times = times
@@ -49,6 +75,8 @@ class TRFEstimator(BaseEstimator):
         self.XtX_ = None
         # Covariance matrix of features X and Y (thus XtX) -> used for computing model using fit_from_cov
         self.XtY_ = None
+        # Scores when computed
+        self.scores = None
 
     def fill_lags(self):
         """Fill the lags attributes, with number of samples and times in seconds.
@@ -387,7 +415,7 @@ class TRFEstimator(BaseEstimator):
         ytrue : ndarray
             True target
         scoring : str (or func in future?)
-            Scoring function to be used ("corr", "rmse")
+            Scoring function to be used ("corr", "rmse", "R2")
         Returns
         -------
         float
@@ -395,9 +423,14 @@ class TRFEstimator(BaseEstimator):
         """
         yhat = self.predict(Xtest)
         if scoring == 'corr':
+            self.scores = np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(len(self.alpha))], axis=-1)
             return np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(len(self.alpha))], axis=-1)
         elif scoring == 'rmse':
+            self.scores = np.stack([_rmse_multifeat(yhat[..., a], ytrue) for a in range(len(self.alpha))], axis=-1)
             return np.stack([_rmse_multifeat(yhat[..., a], ytrue) for a in range(len(self.alpha))], axis=-1)
+        elif scoring == 'R2':
+            self.scores = np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(len(self.alpha))], axis=-1)**2
+            return np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(len(self.alpha))], axis=-1)**2
         else:
             raise NotImplementedError(
                 "Only correlation & RMSE scores are valid for now...")
