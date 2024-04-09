@@ -234,3 +234,20 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feature=False):
             coeff.append(np.dot(V, (z/(S[:, np.newaxis] + nl*l))))
 
     return np.stack(coeff, axis=-1)
+
+
+def _objective_value():
+    '''
+    Computation of the error for a least square regression with the possibility for 2 types of regularization.
+    ''' 
+    #Calc 1/(2n)|Y-1*mu'-sum(Xi*Bi)|^2 + lam0/2*sum(|Bi|_F^2) + lam1*sum(|Bi|_*)
+    n,q = Y.shape
+    K = len(X)
+    obj = 0
+    pred = np.ones((n,1))@mu.T
+    for i in range(K):
+        pred = pred+X[i]@B[i]
+        obj = obj + lam0/2*norm(B[i],ord='fro')**2+lam1*sum(svdvals(B[i]))
+    obj = obj+(1/(2*n))*np.nansum((Y-pred)**2)
+
+    return obj

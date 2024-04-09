@@ -23,7 +23,7 @@ from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing, cen
 from ..viz import get_spatial_colors
 from scipy import linalg
 import mne
-from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat
+from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _objValue
 from scipy.linalg import pinv, svd, norm, svdvals
 
 MEM_CAP = 0.9  # Memory cap for the iRRR model (in GB)
@@ -101,6 +101,7 @@ class iRRREstimator(BaseEstimator):
         self.n_feats_ = None
         self.n_chans_ = None
         self.n_samples_ = None
+        self.n_featlags_ = None
         self.feat_names_ = None
         self.valid_samples_ = None
 
@@ -200,11 +201,13 @@ class iRRREstimator(BaseEstimator):
         # Fill n_samples attribute
         self.n_samples_ = np.sum(self.valid_samples_)
 
-        # Check dimensions  
+        # Check dimensions and fill n_featlags attribute
         err_msg = "Inconsistent duration between features and EEG, check dimensions"
         p = np.array([Xk.shape[1] for Xk in X_list])
         cumsum_p = np.concatenate([[0],np.cumsum(p)])
         assert(all([Xk.shape[0]==self.n_samples_ for Xk in X_list])),err_msg
+        self.n_featlags_ = p
+        
 
         return X_list, y
 
@@ -223,36 +226,33 @@ class iRRREstimator(BaseEstimator):
         self.tol = param_dict.get('Tol',1e-3) # stopping rule
         self.Niter = param_dict.get('Niter',500) # Max iterations,
 
-    def initialization(self,y):
+    def initialization(self,X,cX,y, mu, wY1):
     ### initial parameter estimates
-
-        # get a working Y by filling in Nans with best estimate: I skip this part by just cutting Y short
-        #mu = np.nanmean(y,axis=0,keepdims=True).T  # (n_chan x 1)
-        #wY,wY1,mu = _majorize_Y(Y,np.ones((n,1))@mu.T)
 
         # if randomstart is a list, then it is the initial condition for B, careful with dimensions 
         if isinstance(self.randomstart, list):
-            assert(np.all([Bk.shape==(pk,self.n_chans_) for Bk,pk in zip(self.randomstart,p)]))
-            B = [Bk*wk for Bk,wk in zip(randomstart,weight)]
+            assert(np.all([Bk.shape==(pk,self.n_chans_) for Bk,pk in zip(self.randomstart,self.n_featlags_)]))
+            B = [Bk*wk for Bk,wk in zip(self.randomstart,self.weight)]
         # if randomstart is True, B is initialize using random values
-        elif randomstart:
-            B = [randn(pk,q) for pk in p]
+        elif self.randomstart:
+            B = [randn(pk,q) for pk in self.n_featlags_]
         # if randomstart is False, B is initialize using vanilla OLS
         else:
             B = [pinv(Xk.T @ Xk) @ Xk.T @ wY1 for Xk in X] # OLS
 
-        Theta = [np.zeros((pk,q)) for pk in p] # Lagrange parameters for B
+
+        Theta = [np.zeros((pk,self.n_chans_)) for pk in self.n_featlags_] # Lagrange parameters for B
         cB = np.vstack(B) # vertically concatenated B
 
         A = B.copy()
         cA = cB.copy()
-        cTheta = np.zeros((sum(p),q))
+        cTheta = np.zeros((sum(self.n_featlags_),self.n_chans_))
 
-        _,D_cX,Vh_cX = svd((1/np.sqrt(n))*cX,full_matrices=False)
-        if not varyrho: # fixed rho
-            DeltaMat = Vh_cX.T @ np.diag(1/(D_cX**2+lam0+rho)) @ Vh_cX + \
-                (np.eye(sum(p)) - Vh_cX.T @ Vh_cX)/(lam0+rho)   # inv(1/n*X'X+(lam0+rho)I)
-
+        _,D_cX,Vh_cX = svd((1/np.sqrt(self.n_samples_))*cX,full_matrices=False)
+        if not self.varyrho: # fixed rho
+            DeltaMat = Vh_cX.T @ np.diag(1/(D_cX**2+self.lambdas0+self.rho)) @ Vh_cX + \
+                (np.eye(sum(self.n_featlags_)) - Vh_cX.T @ Vh_cX)/(self.lambdas0+self.rho)   # inv(1/n*X'X+(lam0+rho)I)
+    
         # compute initial objective values
         obj = [_objValue(Y,X,mu,A,lam0,lam1),  # full objective function (with penalties) on observed data
             _objValue(Y,X,mu,A,0,0)] # only the least square part on observed data
@@ -321,6 +321,8 @@ class iRRREstimator(BaseEstimator):
         cX = np.hstack(X)
         meanX = np.hstack(meanX)
 
-        self.initialization(cX,y)
+        #Center, mean of Y. We skipped estimation of Y by cutting out the NaN values
+        mu = np.mean(y, axis=0, keepdims=True).T #mean estimate of Y
+        wY1 = y - mu.T #column centered Y
 
-        return cX, meanX
+        return self.initialization(X,cX,y,mu, wY1)
