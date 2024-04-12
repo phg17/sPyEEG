@@ -30,7 +30,7 @@ MEM_CAP = 0.9  # Memory cap for the iRRR model (in GB)
 
 class iRRREstimator(BaseEstimator):
 
-    def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., lambda0 = 0, lambda1 = 1, fit_intercept=False):
+    def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., lambda0 = [0], lambda1 = [1]):
         '''
         This class implements the iRRR model for s/M/EEG data.     
         1/(2n)*|Y-1*mu'-sum(X_i*B_i)|^2  + lambda1*sum(w_i*|A_i|_*) (+0.5*lambda0*sum(w_i^2*|B_i|^2_F))  s.t. A_i=B_i
@@ -49,34 +49,6 @@ class iRRREstimator(BaseEstimator):
         srate : float
             Default: 1.
             Sampling rate of the data.
-        lambda1: float (positive)
-            Regularization parameter, tuning for nuclear norm
-        lambda0: float (positive)
-            Default 0. Regularization parameter, tuning for ridge penalty
-        param_dict: dict
-            Dictionary of parameters for the model. If None, default parameters are used.
-                weight: ndarray (K x 1) 
-                    Default: np.ones(K)
-                    weight vector, theoretically w(i)=(1/n)*max(svd(X{i}))*(sqrt(q)+sqrt(rank(X{i})))
-                        heuristically, w(i)=|X_i|_F
-                    randomstart: bool or list 
-                        Default: False (bool)
-                        False or initial condition for B (list)
-                    varyrho: bool
-                        Default: False (bool)
-                        Whether or not rho should be adaptative
-                    maxrho: float 
-                        Default: 5 
-                        Maximum value of rho, unused if varyrho==0
-                    rho: float
-                        Default: 0.1
-                        Initial step size
-                    Tol: float
-                        Default: 1E-3
-                        Error tolerance
-                    Niter: int
-                        Default: 500
-                        Number of iterations
 
         TODO:   Implement the param_dict
                 Consistent typing for randomstart
@@ -89,11 +61,6 @@ class iRRREstimator(BaseEstimator):
         self.srate = srate
         self.fitted = False
         self.lags = None
-        self.fit_intercept = fit_intercept
-
-        # Fitting parameters
-        self.lambdas0 = lambda0
-        self.lambda1 = lambda1
 
         # All following attributes are only defined once fitted (hence the "_" suffix)
         self.intercept_ = None
@@ -112,11 +79,13 @@ class iRRREstimator(BaseEstimator):
         self.XtY_ = None
 
         # Coefficients of the iRRR
-        self.A_ = None
-        self.B_ = None
-        self.C_ = None
-        self.mu_ = None
-        self.Theta = None
+        self.lambda0 = lambda0
+        self.lambda1 = lambda1
+        self.lowrankcoef_ = None
+        self.highrankcoef_ = None
+        self.stackcoef_ = None
+        self.intercept_ = None
+        self.Theta_ = None
         self.niter_ = None
         self.rec_Theta_ = None
         self.rec_nonzeros_ = None
@@ -233,8 +202,25 @@ class iRRREstimator(BaseEstimator):
         self.tol = param_dict.get('Tol',1e-3) # stopping rule
         self.Niter = param_dict.get('Niter',500) # Max iterations,
 
-    def initialization(self,X,cX,y, mu, wY1):
+    def center_mean_XY(self,X,y):
+        #Column center Xk's and normalize by the weights
+        X, meanX = center_weight(X, self.weight)
+
+        #Stack into usual feature matrix
+        cX = np.hstack(X)
+        meanX = np.hstack(meanX)
+
+        #Center, mean of Y. We skipped estimation of Y by cutting out the NaN values
+        mu = np.mean(y, axis=0, keepdims=True).T #mean estimate of Y
+        wy = y - mu.T #column centered Y
+
+        return X, cX, meanX, mu, wy
+
+    def initialization(self,X,y,l0,l1):
     ### initial parameter estimates
+
+        # Column center Xk's and normalize by the weights
+        X, cX, meanX, mu, wy = self.center_mean_XY(X,y)
 
         # Initialize B coefficients
         # if randomstart is a list, then it is the initial condition for B, careful with dimensions 
@@ -246,7 +232,7 @@ class iRRREstimator(BaseEstimator):
             B = [randn(pk,q) for pk in self.n_featlags_]
         # if randomstart is False, B is initialize using vanilla OLS
         else:
-            B = [pinv(Xk.T @ Xk) @ Xk.T @ wY1 for Xk in X] # OLS
+            B = [pinv(Xk.T @ Xk) @ Xk.T @ wy for Xk in X] # OLS
 
         # Initialize Lagrange parameters for B and concatenate lists
         Theta = [np.zeros((pk,self.n_chans_)) for pk in self.n_featlags_] 
@@ -258,17 +244,22 @@ class iRRREstimator(BaseEstimator):
 
         _,D_cX,Vh_cX = svd((1/np.sqrt(self.n_samples_))*cX,full_matrices=False)
         if not self.varyrho: # fixed rho
-            DeltaMat = Vh_cX.T @ np.diag(1/(D_cX**2+self.lambdas0+self.rho)) @ Vh_cX + \
-                (np.eye(sum(self.n_featlags_)) - Vh_cX.T @ Vh_cX)/(self.lambdas0+self.rho)   # inv(1/n*X'X+(lam0+rho)I)
+            DeltaMat = Vh_cX.T @ np.diag(1/(D_cX**2+l0+self.rho)) @ Vh_cX + \
+                (np.eye(sum(self.n_featlags_)) - Vh_cX.T @ Vh_cX)/(l0+self.rho)   # inv(1/n*X'X+(lam0+rho)I)
     
         # Compute initial objective values
-        obj = [_objective_value(y,X,mu,A,self.lambdas0,self.lambda1),  # full objective function (with penalties) on observed data
+        obj = [_objective_value(y,X,mu,A,l0,l1),  # full objective function (with penalties) on observed data
             _objective_value(y,X,mu,A,0,0)] # only the least square part on observed data
 
         return obj, A,cA, cB, Theta, cTheta, DeltaMat
-    
-    def ADMM(self,obj_init,A,cA,cB,X,cX, meanX, Theta, cTheta, DeltaMat, y,wY1,mu,verbose=False):
+        
+    def ADMM(self,X,y,l0,l1,verbose=False):
+        
+        obj_init, A, cA, cB, Theta, cTheta, DeltaMat = self.initialization(X,y,l0,l1)
+        # Column center Xk's and normalize by the weights
+        X, cX, meanX, mu, wy = self.center_mean_XY(X,y)
 
+        #Initialize loop parameters
         niter = 0
         diff = np.inf
         rec_obj = np.zeros((self.Niter+1,2)) # record objective values
@@ -277,6 +268,7 @@ class iRRREstimator(BaseEstimator):
         rec_nonzeros = np.zeros((self.Niter,self.n_feats_)) # record count of nonzero svals
         rec_primal = np.zeros((self.Niter)) # record total primal residual
         rec_dual = np.zeros((self.Niter)) # record total dual residual
+        rec_rank = np.zeros((self.Niter+1)) # record rank of A
         _,D_cX,Vh_cX = svd((1/np.sqrt(self.n_samples_))*cX,full_matrices=False)
 
         while niter < self.Niter and np.abs(diff)>self.tol:
@@ -287,9 +279,9 @@ class iRRREstimator(BaseEstimator):
 
             # estimate concatenated B
             if self.varyrho:
-                DeltaMat = Vh_cX.T @ np.diag(1/(D_cX**2+self.lambdas0+self.rho)) @ Vh_cX + \
-                    (np.eye(sum(self.n_featlags_)) - Vh_cX.T @ Vh_cX)/(self.lambdas0+self.rho)
-            cB = DeltaMat@((1/self.n_samples_)*cX.T@wY1 + self.rho*cA + cTheta)
+                DeltaMat = Vh_cX.T @ np.diag(1/(D_cX**2+l0+self.rho)) @ Vh_cX + \
+                    (np.eye(sum(self.n_featlags_)) - Vh_cX.T @ Vh_cX)/(l0+self.rho)
+            cB = DeltaMat@((1/self.n_samples_)*cX.T@wy + self.rho*cA + cTheta)
 
             # partition cB into components
             B = [cB[cp:nextcp,:] for cp,nextcp in zip(self.n_featlags_cumsum_[:-1],self.n_featlags_cumsum_[1:])]
@@ -298,7 +290,7 @@ class iRRREstimator(BaseEstimator):
             for k,(Bk,Thetak) in enumerate(zip(B,Theta)):
                 temp = Bk-Thetak/self.rho
                 [tempU,tempD,tempVh] = svd(temp,full_matrices=False)
-                tempD = _soft_threshold(tempD,self.lambda1/self.rho)
+                tempD = _soft_threshold(tempD,l1/self.rho)
                 A[k] = tempU @ np.diag(tempD) @ tempVh
                 Theta[k] = Theta[k]+self.rho*(A[k]-Bk)
                 rec_nonzeros[niter-1,k] = np.count_nonzero(tempD)
@@ -320,15 +312,17 @@ class iRRREstimator(BaseEstimator):
             rec_dual[niter-1] = dual
 
             # check objective values
-            obj = [_objective_value(y,X,mu,A,self.lambdas0,self.lambda1),  # full objective function (with penalties) on observed data
+            obj = [_objective_value(y,X,mu,A,l0,l1),  # full objective function (with penalties) on observed data
                 _objective_value(y,X,mu,A,0,0)] # only the least square part on observed data
             rec_obj[niter,:] = obj
 
             # stopping rule
             diff = max(primal,self.rho*dual) # primal
 
+            rec_rank[niter] = np.linalg.matrix_rank(cA)
+
         if niter==self.Niter:
-            print(f'iRRR does NOT converge after {Niter} iterations!')
+            print(f'iRRR does NOT converge after {self.Niter} iterations!')
         else:
             print(f'iRRR converges after {niter} iterations.')
 
@@ -338,16 +332,18 @@ class iRRREstimator(BaseEstimator):
         C = np.vstack(A)
         mu = (mu.T - meanX@C).T
 
+        
         self.niter_ = niter,
         self.rec_Theta_ = rec_Theta[:niter,:],
         self.rec_nonzeros_ = rec_nonzeros[:niter,:],
         self.rec_primal_ = rec_primal[:niter],
         self.rec_dual_ = rec_dual[:niter],
         self.rec_obj_ = rec_obj[:niter+1]
+        self.rec_rank_ = rec_rank[:niter]
 
         return C,mu,A,B,Theta
 
-    def fit(self, X, y, lagged=False, drop=True, lambda0 = 0, lambda1 = 1, param_dict = dict(), feat_names = (), verbose = False):
+    def fit(self, X, y, lagged=False, drop=True, param_dict = dict(), feat_names = (), verbose = False):
         """
         Mapping X -> y
         Parameters
@@ -396,26 +392,28 @@ class iRRREstimator(BaseEstimator):
         # Preprocess and lag inputs. X is now a list of lagged features matrices
         X, y = self.get_XY(X, y, lagged, drop, feat_names)
 
-        # Adding intercept feature:
-        if self.fit_intercept:
-            X = np.hstack([np.ones((len(X), 1)), X])
-
         # Fill fitting parameters attributes
         self.fill_attributes_fit(param_dict)
 
-        # column center Xk's and normalize by the weights
-        X, meanX = center_weight(X, self.weight)
+        A_l, B_l, C_l, mu_l, Theta_l = [], [], [], [], []
 
-        #Stack into usual feature matrix
-        cX = np.hstack(X)
-        meanX = np.hstack(meanX)
+        for l0 in self.lambda0:
+            for l1 in self.lambda1:
+                C, mu, A, B, Theta = self.ADMM(X, y, l0,l1,verbose = verbose)
+                A_l.append(A)
+                B_l.append(B)
+                C_l.append(C)
+                mu_l.append(mu)
+                Theta_l.append(Theta)
+        
+        self.lowrankcoef_ = np.asarray(A_l)
+        self.highrankcoef_ = np.asarray(B_l)
+        self.stackcoef_ = np.asarray(C_l)
+        self.intercept = np.asarray(mu_l)
+        self.Theta_ = np.asarray(Theta_l)
 
-        #Center, mean of Y. We skipped estimation of Y by cutting out the NaN values
-        mu = np.mean(y, axis=0, keepdims=True).T #mean estimate of Y
-        wY1 = y - mu.T #column centered Y
+        self.fitted = True
 
-        obj_init, A, cA, cB, Theta, cTheta, Delta_Mat = self.initialization(X,cX,y,mu,wY1)
+        return self
+    
 
-        C,mu,A,B,Theta = self.ADMM(obj_init,A,cA, cB,X,cX, meanX, Theta, cTheta, Delta_Mat, y,wY1,mu,verbose)
-
-        return C, mu, A, B, Theta

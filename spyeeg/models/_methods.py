@@ -236,18 +236,30 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feature=False):
     return np.stack(coeff, axis=-1)
 
 
-def _objective_value():
+def _objective_value(y,X,mu,B,lambdas0,lambda1):
     '''
     Computation of the error for a least square regression with the possibility for 2 types of regularization.
     ''' 
     #Calc 1/(2n)|Y-1*mu'-sum(Xi*Bi)|^2 + lam0/2*sum(|Bi|_F^2) + lam1*sum(|Bi|_*)
-    n,q = Y.shape
+    n,q = y.shape
     K = len(X)
     obj = 0
     pred = np.ones((n,1))@mu.T
     for i in range(K):
         pred = pred+X[i]@B[i]
-        obj = obj + lam0/2*norm(B[i],ord='fro')**2+lam1*sum(svdvals(B[i]))
-    obj = obj+(1/(2*n))*np.nansum((Y-pred)**2)
+        obj = obj + lambdas0/2*linalg.norm(B[i],ord='fro')**2+lambda1*sum(linalg.svdvals(B[i]))
+    obj = obj+(1/(2*n))*np.nansum((y-pred)**2)
 
     return obj
+
+def _soft_threshold(d,lam):
+    '''
+    Soft thresholding function.
+    d is the array of singular values
+    lam is a positive threshold
+    '''
+    dout = d.copy()
+    np.fmax(d-lam,0,where=d>0,out=dout)
+    np.fmin(d+lam,0,where=d<0,out=dout)
+
+    return dout
