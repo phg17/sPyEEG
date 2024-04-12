@@ -19,11 +19,11 @@ import numpy as np
 from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 from mne.decoding import BaseEstimator
-from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing, center_weight
+from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing, center_weight, count_significant_figures
 from ..viz import get_spatial_colors
 from scipy import linalg
 import mne
-from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _objValue
+from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _objective_value, _soft_threshold
 from scipy.linalg import pinv, svd, norm, svdvals
 
 MEM_CAP = 0.9  # Memory cap for the iRRR model (in GB)
@@ -104,6 +104,7 @@ class iRRREstimator(BaseEstimator):
         self.n_featlags_ = None
         self.feat_names_ = None
         self.valid_samples_ = None
+        self.n_featlags_cumsum_ = None
 
         # Autocorrelation matrix of feature X (thus XtX) -> used for computing model using fit_from_cov
         self.XtX_ = None
@@ -116,6 +117,12 @@ class iRRREstimator(BaseEstimator):
         self.C_ = None
         self.mu_ = None
         self.Theta = None
+        self.niter_ = None
+        self.rec_Theta_ = None
+        self.rec_nonzeros_ = None
+        self.rec_primal_ = None
+        self.rec_dual_ = None
+        self.rec_obj_ = None
 
     def fill_lags(self):
         """Fill the lags attributes, with number of samples and times in seconds.
@@ -207,7 +214,7 @@ class iRRREstimator(BaseEstimator):
         cumsum_p = np.concatenate([[0],np.cumsum(p)])
         assert(all([Xk.shape[0]==self.n_samples_ for Xk in X_list])),err_msg
         self.n_featlags_ = p
-        
+        self.n_featlags_cumsum_ = cumsum_p
 
         return X_list, y
 
@@ -229,6 +236,7 @@ class iRRREstimator(BaseEstimator):
     def initialization(self,X,cX,y, mu, wY1):
     ### initial parameter estimates
 
+        # Initialize B coefficients
         # if randomstart is a list, then it is the initial condition for B, careful with dimensions 
         if isinstance(self.randomstart, list):
             assert(np.all([Bk.shape==(pk,self.n_chans_) for Bk,pk in zip(self.randomstart,self.n_featlags_)]))
@@ -240,25 +248,106 @@ class iRRREstimator(BaseEstimator):
         else:
             B = [pinv(Xk.T @ Xk) @ Xk.T @ wY1 for Xk in X] # OLS
 
-
-        Theta = [np.zeros((pk,self.n_chans_)) for pk in self.n_featlags_] # Lagrange parameters for B
-        cB = np.vstack(B) # vertically concatenated B
-
+        # Initialize Lagrange parameters for B and concatenate lists
+        Theta = [np.zeros((pk,self.n_chans_)) for pk in self.n_featlags_] 
+        cB = np.vstack(B) 
         A = B.copy()
         cA = cB.copy()
         cTheta = np.zeros((sum(self.n_featlags_),self.n_chans_))
+
 
         _,D_cX,Vh_cX = svd((1/np.sqrt(self.n_samples_))*cX,full_matrices=False)
         if not self.varyrho: # fixed rho
             DeltaMat = Vh_cX.T @ np.diag(1/(D_cX**2+self.lambdas0+self.rho)) @ Vh_cX + \
                 (np.eye(sum(self.n_featlags_)) - Vh_cX.T @ Vh_cX)/(self.lambdas0+self.rho)   # inv(1/n*X'X+(lam0+rho)I)
     
-        # compute initial objective values
-        obj = [_objValue(Y,X,mu,A,lam0,lam1),  # full objective function (with penalties) on observed data
-            _objValue(Y,X,mu,A,0,0)] # only the least square part on observed data
+        # Compute initial objective values
+        obj = [_objective_value(y,X,mu,A,self.lambdas0,self.lambda1),  # full objective function (with penalties) on observed data
+            _objective_value(y,X,mu,A,0,0)] # only the least square part on observed data
 
+        return obj, A,cA, cB, Theta, cTheta, DeltaMat
+    
+    def ADMM(self,obj_init,A,cA,cB,X,cX, meanX, Theta, cTheta, DeltaMat, y,wY1,mu,verbose=False):
 
-    def fit(self, X, y, lagged=False, drop=True, lambda0 = 0, lambda1 = 1, param_dict = dict(), feat_names = ()):
+        niter = 0
+        diff = np.inf
+        rec_obj = np.zeros((self.Niter+1,2)) # record objective values
+        rec_obj[0,:] = obj_init
+        rec_Theta = np.zeros((self.Niter,self.n_feats_)) # record Frobenius norm of Theta
+        rec_nonzeros = np.zeros((self.Niter,self.n_feats_)) # record count of nonzero svals
+        rec_primal = np.zeros((self.Niter)) # record total primal residual
+        rec_dual = np.zeros((self.Niter)) # record total dual residual
+        _,D_cX,Vh_cX = svd((1/np.sqrt(self.n_samples_))*cX,full_matrices=False)
+
+        while niter < self.Niter and np.abs(diff)>self.tol:
+            if verbose:
+                print(f"iRRR iteration {niter+1}/{self.Niter}, diff: {round(diff,count_significant_figures(self.tol) + 1)}/{self.tol}",end="\r")
+            niter += 1
+            cB_old = cB.copy()
+
+            # estimate concatenated B
+            if self.varyrho:
+                DeltaMat = Vh_cX.T @ np.diag(1/(D_cX**2+self.lambdas0+self.rho)) @ Vh_cX + \
+                    (np.eye(sum(self.n_featlags_)) - Vh_cX.T @ Vh_cX)/(self.lambdas0+self.rho)
+            cB = DeltaMat@((1/self.n_samples_)*cX.T@wY1 + self.rho*cA + cTheta)
+
+            # partition cB into components
+            B = [cB[cp:nextcp,:] for cp,nextcp in zip(self.n_featlags_cumsum_[:-1],self.n_featlags_cumsum_[1:])]
+
+            # estimate each Ak and update Theta
+            for k,(Bk,Thetak) in enumerate(zip(B,Theta)):
+                temp = Bk-Thetak/self.rho
+                [tempU,tempD,tempVh] = svd(temp,full_matrices=False)
+                tempD = _soft_threshold(tempD,self.lambda1/self.rho)
+                A[k] = tempU @ np.diag(tempD) @ tempVh
+                Theta[k] = Theta[k]+self.rho*(A[k]-Bk)
+                rec_nonzeros[niter-1,k] = np.count_nonzero(tempD)
+                rec_Theta[niter-1,k] = norm(Theta[k],ord='fro')
+
+            # update cA and cTheta
+            for cp,nextcp,Ak,Thetak in zip(self.n_featlags_cumsum_[:-1],self.n_featlags_cumsum_[1:],A,Theta):
+                cA[cp:nextcp,:] = Ak
+                cTheta[cp:nextcp,:] = Thetak
+
+            # update rho
+            if self.varyrho:
+                self.rho = min(self.maxrho,1.1*self.rho) # steadily increasing rho
+
+            # check residuals
+            primal = norm(cA-cB,ord='fro')**2
+            rec_primal[niter-1] = primal
+            dual = norm(cB-cB_old,ord='fro')**2
+            rec_dual[niter-1] = dual
+
+            # check objective values
+            obj = [_objective_value(y,X,mu,A,self.lambdas0,self.lambda1),  # full objective function (with penalties) on observed data
+                _objective_value(y,X,mu,A,0,0)] # only the least square part on observed data
+            rec_obj[niter,:] = obj
+
+            # stopping rule
+            diff = max(primal,self.rho*dual) # primal
+
+        if niter==self.Niter:
+            print(f'iRRR does NOT converge after {Niter} iterations!')
+        else:
+            print(f'iRRR converges after {niter} iterations.')
+
+        # rescale parameter estimate, add back mean
+        A = [Ak/w for Ak,w in zip(A,self.weight)]
+        B = [Bk/w for Bk,w in zip(B,self.weight)]
+        C = np.vstack(A)
+        mu = (mu.T - meanX@C).T
+
+        self.niter_ = niter,
+        self.rec_Theta_ = rec_Theta[:niter,:],
+        self.rec_nonzeros_ = rec_nonzeros[:niter,:],
+        self.rec_primal_ = rec_primal[:niter],
+        self.rec_dual_ = rec_dual[:niter],
+        self.rec_obj_ = rec_obj[:niter+1]
+
+        return C,mu,A,B,Theta
+
+    def fit(self, X, y, lagged=False, drop=True, lambda0 = 0, lambda1 = 1, param_dict = dict(), feat_names = (), verbose = False):
         """
         Mapping X -> y
         Parameters
@@ -325,4 +414,8 @@ class iRRREstimator(BaseEstimator):
         mu = np.mean(y, axis=0, keepdims=True).T #mean estimate of Y
         wY1 = y - mu.T #column centered Y
 
-        return self.initialization(X,cX,y,mu, wY1)
+        obj_init, A, cA, cB, Theta, cTheta, Delta_Mat = self.initialization(X,cX,y,mu,wY1)
+
+        C,mu,A,B,Theta = self.ADMM(obj_init,A,cA, cB,X,cX, meanX, Theta, cTheta, Delta_Mat, y,wY1,mu,verbose)
+
+        return C, mu, A, B, Theta
