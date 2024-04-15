@@ -111,7 +111,6 @@ class iRRREstimator(BaseEstimator):
             self.times = np.asarray(self.times)
             self.lags = lag_sparse(self.times, self.srate)[::-1]
 
-
     def get_XY(self, X, y, lagged=False, drop=True, feat_names=()):
         '''
         Preprocess X and y before fitting (finding mapping between X -> y)
@@ -341,7 +340,7 @@ class iRRREstimator(BaseEstimator):
         self.rec_obj_ = rec_obj[:niter+1]
         self.rec_rank_ = rec_rank[:niter]
 
-        return C,mu,A,B,Theta
+        return A,B,C,mu,Theta
 
     def fit(self, X, y, lagged=False, drop=True, param_dict = dict(), feat_names = (), verbose = False):
         """
@@ -385,8 +384,8 @@ class iRRREstimator(BaseEstimator):
 
         Returns
         -------
-
-        TODO: Optimize Initial fitting for B
+        self : instance of iRRREstimator
+            The iRRR instance.
 
         """
         # Preprocess and lag inputs. X is now a list of lagged features matrices
@@ -395,25 +394,206 @@ class iRRREstimator(BaseEstimator):
         # Fill fitting parameters attributes
         self.fill_attributes_fit(param_dict)
 
-        A_l, B_l, C_l, mu_l, Theta_l = [], [], [], [], []
+        # Initialize the model
+        A_all = np.zeros([self.n_feats_,self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
+        B_all = np.zeros([self.n_feats_,self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
+        C_all = np.zeros([self.n_feats_*self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
 
-        for l0 in self.lambda0:
-            for l1 in self.lambda1:
-                C, mu, A, B, Theta = self.ADMM(X, y, l0,l1,verbose = verbose)
-                A_l.append(A)
-                B_l.append(B)
-                C_l.append(C)
-                mu_l.append(mu)
-                Theta_l.append(Theta)
+        for l0_i, l0 in enumerate(self.lambda0):
+            for l1_i, l1 in enumerate(self.lambda1):
+                A, B, C, mu, Theta = self.ADMM(X, y, l0, l1, verbose=verbose)
+                A_all[:, :, :, l0_i, l1_i] = A
+                B_all[:, :, :, l0_i, l1_i] = B
+                C_all[:, :, l0_i, l1_i] = C
         
-        self.lowrankcoef_ = np.asarray(A_l)
-        self.highrankcoef_ = np.asarray(B_l)
-        self.stackcoef_ = np.asarray(C_l)
-        self.intercept = np.asarray(mu_l)
-        self.Theta_ = np.asarray(Theta_l)
+        self.lowrankcoef_ = A_all
+        self.highrankcoef_ = B_all
+        self.stackcoef_ = C_all
 
         self.fitted = True
 
         return self
     
+    def get_coef(self):
+        '''
+        Format and return coefficients. 
 
+        Returns
+        -------
+        coef_ : ndarray (nlags x nfeats x nchans x regularization params)
+        '''
+
+        betas_high = self.highrankcoef_.swapaxes(0,1)[::-1, :]
+        betas_low = self.lowrankcoef_.swapaxes(0,1)[::-1, :]
+
+        return betas_high, betas_low
+    
+
+    def predict(self, X):
+        """Compute output based on fitted coefficients and feature matrix X.
+        Parameters
+        ----------
+        X : ndarray
+            Matrix of features (can be already lagged or not).
+        Returns
+        -------
+        ndarray
+            Reconstruction of target with current beta estimates
+        Notes
+        -----
+        If the matrix onky has features in its column (not yet lagged), the lagged version
+        of the feature matrix will be created on the fly (this might take some time if the matrix
+        is large).
+        """
+        assert self.fitted, "Fit model first!"
+
+        betas = self.stackcoef_
+
+        # Check if input has been lagged already, if not, do it:
+        if X.shape[1] != len(self.lags) * self.n_feats_:
+            X = lag_matrix(X, lag_samples=self.lags, filling=0.)
+
+        # Predict it for every lambda0 and lambda1
+        pred_list = [[X.dot(betas[..., i, j]) for j in range(betas.shape[-1])] for i in range(betas.shape[-2])]
+        pred = np.transpose(np.array(pred_list), (2,3,0,1))
+
+        return pred  # Shape T x Nchan x n_lambda0 x n_lambda1
+    
+
+    def score(self, Xtest, ytrue, scoring="corr"):
+        """Compute a score of the model given true target and estimated target from Xtest.
+        Parameters
+        ----------
+        Xtest : ndarray
+            Array used to get "yhat" estimate from model
+        ytrue : ndarray
+            True target
+        scoring : str (or func in future?)
+            Scoring function to be used ("corr", "rmse", "R2")
+        Returns
+        -------
+        float
+            Score value computed on whole segment.
+        """
+        yhat = self.predict(Xtest)
+        if scoring == 'corr':
+            scores_ij = np.array([[_corr_multifeat(yhat[..., i, j], ytrue, nchans=self.n_chans_)
+                                for j in range(len(self.lambda1))] for i in range(len(self.lambda0))])
+            # Stack along a new last axis, keeping i and j as separate dimensions
+            self.scores = np.transpose(np.stack(scores_ij, axis=-1),(1,2,0))
+            # Return this array as the result
+            return self.scores
+        
+        elif scoring == 'rmse':
+            scores_ij = np.array([[_rmse_multifeat(yhat[..., i, j], ytrue, nchans=self.n_chans_)
+                                for j in range(len(self.lambda1))] for i in range(len(self.lambda0))])
+            # Stack along a new last axis, keeping i and j as separate dimensions
+            self.scores = np.transpose(np.stack(scores_ij, axis=-1),(1,2,0))
+            # Return this array as the result
+            return self.scores
+        elif scoring == 'R2':
+            scores_ij = np.array([[_corr_multifeat(yhat[..., i, j], ytrue, nchans=self.n_chans_)
+                                for j in range(len(self.lambda1))] for i in range(len(self.lambda0))])
+            # Stack along a new last axis, keeping i and j as separate dimensions
+            self.scores = np.transpose(np.stack(scores_ij, axis=-1),(1,2,0))
+            # Return this array as the result
+            return self.scores**2
+        else:
+            raise NotImplementedError(
+                "Only correlation, R2 & RMSE scores are valid for now...")
+        
+    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="corr", segment_length=None, fit_mode='direct', verbose=True):
+        '''
+        Standard cross-validation. Scoring
+        Parameters
+        ----------
+        X : ndarray (nsamples x nfeats)
+        y : ndarray (nsamples x nchans)
+        n_splits : integer (default: 5)
+            Number of folds
+        lagged : bool
+            Default: False.
+            Whether the X matrix has been previously 'lagged' (intercept still to be added).
+        drop : bool
+            Default: True.
+            Whether to drop non valid samples (if False, non valid sample are filled with 0.)
+        train_full : bool (default: True)
+            Train model using all the available data after the end of x-val
+        scoring : string (default: "corr")
+            Scoring method (see scoring())
+        segment_length: integer, float (default: None)
+            Length of a testing segments (that testing data will be chopped into). If None, use all the available data.
+        fit_mode : string {'direct' | 'from_cov_xxx'} (default: 'direct')
+            Model training mode. Options:
+            'direct' - fit using all the avaiable data at once (i.e. fit())
+            'from_cov_xxx' - fit using all the avaiable data from covariance matrices. 
+            The routine will chop data into pieces, compute piece-wise cov matrices and fit the model.
+            'xxx' portion of the string indicates the lenght of the segments that the data will be chopped into. 
+            If not declared (i.e. 'from_cov') the default 2.5 minutes will be used.
+        verbose : bool (defaul: True)
+        Returns
+        -------
+        scores - ndarray (n_splits x segments x nchans x alpha)
+        ToDo:
+        - implement standard scaler / normalizer (optional)
+        - handle different scores
+        '''
+
+        if np.ndim(self.lambda0) + np.ndim(self.lambda1) < 1 or len(self.lambda0) + len(self.lambda1) <= 1:
+            raise ValueError(
+                "Supply several regularization values to TRF constructor to use this method.")
+
+        if segment_length:
+            segment_length = segment_length*self.srate  # time to samples
+
+        self.fill_lags()
+
+        self.n_feats_ = X.shape[1] if not lagged else X.shape[1] // len(
+            self.lags)
+        self.n_chans_ = y.shape[1] if y.ndim == 2 else y.shape[2]
+
+        kf = KFold(n_splits=n_splits)
+        if segment_length:
+            scores = []
+        else:
+            scores = np.zeros((n_splits, self.n_chans_, len(self.lambda0), len(self.lambda1)))
+
+        for kfold, (train, test) in enumerate(kf.split(X)):
+            if verbose:
+                print("Training/Evaluating fold %d/%d" % (kfold+1, n_splits))
+
+            # Fit using trick with adding covariance matrices -> saves RAM
+            self.fit(X[train, :], y[train, :])
+
+            if segment_length:  # Chop testing data into smaller pieces
+
+                if (len(test) % segment_length) > 0:  # Crop if there are some odd samples
+                    test_crop = test[:-int(len(test) % segment_length)]
+                else:
+                    test_crop = test[:]
+
+                # Reshape to # segments x segment duration
+                test_segments = test_crop.reshape(
+                    int(len(test_crop) / segment_length), -1)
+
+                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :]) for i in range(
+                    test_segments.shape[0])]  # Evaluate each segment
+
+                scores.append(ccs)
+            else:  # Evaluate using the entire testing data
+                scores[kfold, :] = self.score(X[test, :], y[test, :])
+
+        if segment_length:
+            scores = np.asarray(scores)
+
+        if train_full:
+            if verbose:
+                print("Fitting full model...")
+            # Fit using trick with adding covariance matrices -> saves RAM
+            if fit_mode.find('from_cov') > -1:
+                self.fit_from_cov(X, y, overwrite=True,
+                                  part_length=part_lenght)
+            else:
+                self.fit(X, y)
+
+        return scores
