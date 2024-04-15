@@ -167,18 +167,30 @@ def _twed(A, timeSA, B, timeSB, nu, _lambda):
     return distance, DP
 
 
-def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feature=False):
+def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False):
     '''
     SVD-inspired fast implementation of the SVD fitting.
     Note: When fitting the intercept, it's also penalized!
           If on doesn't want that, simply use average for each channel of y to estimate intercept.
+
+    # TODO: At the moment, the per-coefficient regularization expects 1 regularization per coefficient.
+            This can be problematic when fitting large models and/or forward backward models. Something
+            along the lines of input/output channel grouping and assigning individual regularization per 
+            channel not coefficient.
     Parameters
     ----------
     X : ndarray (nsamples x nfeats) or autocorrelation matrix XtX (nfeats x nfeats) (if from_cov == True)
     y : ndarray (nsamples x nchans) or covariance matrix XtY (nfeats x nchans) (if from_cov == True)
     alpha : array-like.
         Default: [0.].
-        List of regularization parameters.
+        List of regularization parameters. Regularization is applied 
+        If 1D -> range of regularization params for the model (same reg. for all coeffs.)
+        If 2D -> list of coefficient specific regularization parameters (banded regularization)
+                 (Experimental! Use with caution...)
+        Ex. 
+        - [0, 1, 2, 3] -> 4 models with the same reg. params for all coeffs
+        - [[0,1], [1,1]] -> 2 models with 2 feature specific regularization [0,1], [1,1]
+
     from_cov : bool
         Default: False.
         Use covariance matrices XtX & XtY instead of raw x, y arrays.
@@ -197,8 +209,6 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feature=False):
     # Cast alpha in ndarray
     if isinstance(alpha, float):
         alpha = np.asarray([alpha])
-    elif alpha_feature:
-        alpha = np.asarray(alpha).T
     else:
         alpha = np.asarray(alpha)
 
@@ -214,9 +224,15 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feature=False):
     # and compute the average
     tol = np.finfo(float).eps
     r = sum(S > tol)
-    S = S[0:r]
-    V = V[:, 0:r]
+    S = S[:r]
+    V = V[:, :r]
     nl = np.mean(S)
+
+    # If per-coefficient regularization sort and drop alphas as well
+    if len(alpha.shape) == 2:
+        if alpha.shape[1] == len(S):
+            alpha = alpha[:,s_ind] # Sort according to eigenvals
+            alpha = alpha[:, :r] # Drop coefficients corresponding to 'zero' eigenvals
 
     # Compute z
     z = np.dot(V.T, XtY)
@@ -225,13 +241,8 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feature=False):
     coeff = []
 
     # Compute coefficients for different regularization parameters
-    if alpha_feature:
-        for l in alpha:
-            coeff.append(np.dot(V, (z/(S + nl*l)[:, np.newaxis])))
-
-    else:
-        for l in alpha:
-            coeff.append(np.dot(V, (z/(S[:, np.newaxis] + nl*l))))
+    for l in alpha:
+        coeff.append(np.dot(V, (z/(S + nl*l)[:, np.newaxis])))
 
     return np.stack(coeff, axis=-1)
 
