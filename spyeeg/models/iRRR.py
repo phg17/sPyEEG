@@ -590,10 +590,6 @@ class iRRREstimator(BaseEstimator):
             if verbose:
                 print("Fitting full model...")
             # Fit using trick with adding covariance matrices -> saves RAM
-            if fit_mode.find('from_cov') > -1:
-                self.fit_from_cov(X, y, overwrite=True,
-                                  part_length=part_lenght)
-            else:
-                self.fit(X, y)
+            self.fit(X, y)
 
         return scores
