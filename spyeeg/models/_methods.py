@@ -11,6 +11,7 @@ from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
 from ..viz import get_spatial_colors
 from scipy import linalg
 import mne
+import itertools
 
 
 def _get_covmat(x, y):
@@ -48,6 +49,23 @@ def _rmse_multifeat(yhat, ytrue, axis=0):
     rmses : 1-D vector (nchan), RMSE for each channel
     '''
     return np.sqrt(np.mean((yhat-ytrue)**2, axis))
+
+def _r2_multifeat(yhat, ytrue, axis=0):
+    '''
+    Helper function for computing the coefficient of determination (R²) for multiple channels at once.
+    Parameters
+    ----------
+    yhat : ndarray (T x nchan), estimate
+    ytrue : ndarray (T x nchan), reference
+    axis : axis along which to compute the R²
+    Returns
+    -------
+    r2_scores : 1-D vector (nchan), R² for each channel
+    '''
+    ss_res = np.sum((ytrue - yhat) ** 2, axis=axis)  # Sum of squares of residuals
+    ss_tot = np.sum((ytrue - np.mean(ytrue, axis=axis)) ** 2, axis=axis)  # Total sum of squares
+    r2_scores = 1 - (ss_res / ss_tot)  # R² score for each channel
+    return r2_scores
 
 
 def dirac_distance(dirac1, dirac2, Fs, window_size=0.01):
@@ -167,16 +185,12 @@ def _twed(A, timeSA, B, timeSB, nu, _lambda):
     return distance, DP
 
 
-def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False):
+def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat = 1):
     '''
     SVD-inspired fast implementation of the SVD fitting.
     Note: When fitting the intercept, it's also penalized!
           If on doesn't want that, simply use average for each channel of y to estimate intercept.
 
-    # TODO: At the moment, the per-coefficient regularization expects 1 regularization per coefficient.
-            This can be problematic when fitting large models and/or forward backward models. Something
-            along the lines of input/output channel grouping and assigning individual regularization per 
-            channel not coefficient.
     Parameters
     ----------
     X : ndarray (nsamples x nfeats) or autocorrelation matrix XtX (nfeats x nfeats) (if from_cov == True)
@@ -185,18 +199,19 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False):
         Default: [0.].
         List of regularization parameters. Regularization is applied 
         If 1D -> range of regularization params for the model (same reg. for all coeffs.)
-        If 2D -> list of coefficient specific regularization parameters (banded regularization)
-                 (Experimental! Use with caution...)
-        Ex. 
-        - [0, 1, 2, 3] -> 4 models with the same reg. params for all coeffs
-        - [[0,1], [1,1]] -> 2 models with 2 feature specific regularization [0,1], [1,1]
-
     from_cov : bool
         Default: False.
         Use covariance matrices XtX & XtY instead of raw x, y arrays.
+    alpha_feat : bool
+        Default: False.
+        If True, regularization is applied per feature. In this case, alpha is being re-written as
+        all the possible combinations of alpha. This exponentianates computation time, avoid if possible
+        or reduce to a minimum the possible combinations
     Returns
     -------
     model_coef : ndarray (model_feats* x alphas) *-specific shape depends on the model
+
+    TO DO: allows to input specific alpha matrices rather than computing all cominations.
     '''
     # Compute covariance matrices
     if not from_cov:
@@ -229,10 +244,14 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False):
     nl = np.mean(S)
 
     # If per-coefficient regularization sort and drop alphas as well
-    if len(alpha.shape) == 2:
-        if alpha.shape[1] == len(S):
-            alpha = alpha[:,s_ind] # Sort according to eigenvals
-            alpha = alpha[:, :r] # Drop coefficients corresponding to 'zero' eigenvals
+    if alpha_feat:
+        combinations = list(itertools.product(alpha , repeat=n_feat))
+        n_lag = XtX.shape[0] // n_feat
+        new_alpha = np.zeros((len(combinations), XtX.shape[0]))
+        for i, comb in enumerate(combinations):
+            new_alpha[i, :] = np.repeat(comb, n_lag)
+        new_alpha = new_alpha[:,s_ind] # Sort according to eigenvals
+        new_alpha = new_alpha[:, :r] # Drop coefficients corresponding to 'zero' eigenvals
 
     # Compute z
     z = np.dot(V.T, XtY)
@@ -241,9 +260,13 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False):
     coeff = []
 
     # Compute coefficients for different regularization parameters
-    for l in alpha:
-        coeff.append(np.dot(V, (z/(S + nl*l)[:, np.newaxis])))
-
+    if alpha_feat:
+        for l in new_alpha:
+            coeff.append(np.dot(V, (z/(S + nl*l)[:, np.newaxis])))
+    else:
+        for l in alpha:
+            coeff.append(np.dot(V, (z/(S + nl*l)[:, np.newaxis])))
+    
     return np.stack(coeff, axis=-1)
 
 

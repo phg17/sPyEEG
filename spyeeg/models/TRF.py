@@ -10,7 +10,7 @@ from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
 from ..viz import get_spatial_colors
 from scipy import linalg
 import mne
-from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat
+from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat
 
 # Memory cap (i.e. max usage).
 # By default set to 90% to prevent bricking machines in corner cases...
@@ -19,7 +19,7 @@ MEM_CAP = 0.9
 
 class TRFEstimator(BaseEstimator):
 
-    def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., alpha=[0.], fit_intercept=False, mtype='forward'):
+    def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., alpha=[0.], fit_intercept=False, mtype='forward', alpha_feat = False):
         '''
         This class implements the TRF model for s/M/EEG data.
         times : mismatch a -> b, where a - dependent, b - predicted
@@ -46,6 +46,10 @@ class TRFEstimator(BaseEstimator):
         mtype : str
             Default: 'forward'
             Forward or backward. Required for formatting coefficients in get_coef (convention: forward - stimulus -> eeg, backward - eeg - stimulus)
+        alpha_feat : bool
+            Default: False
+            Whether to compute alpha for each feature separately and fit them. If True, alpha will be modified to be a list of all possible combinations.
+            This increases computation time exponentially, only use if dealing with few very different regressors, or to check differences are minimal.
 
         TODO:
             - Implement a method to compute alpha from the data (e.g. nested cross-validation) directly in the function
@@ -58,6 +62,7 @@ class TRFEstimator(BaseEstimator):
         self.times = times
         self.srate = srate
         self.alpha = alpha
+        self.alpha_feat = alpha_feat
         # Forward or backward. Required for formatting coefficients in get_coef (convention: forward - stimulus -> eeg, backward - eeg - stimulus)
         self.mtype = mtype
         self.fit_intercept = fit_intercept
@@ -194,7 +199,7 @@ class TRFEstimator(BaseEstimator):
             X = np.hstack([np.ones((len(X), 1)), X])
 
         # Regress with Ridge to obtain coef for the input alpha
-        self.coef_ = _ridge_fit_SVD(X, y, self.alpha)
+        self.coef_ = _ridge_fit_SVD(X, y, self.alpha, alpha_feat = self.alpha_feat, n_feat=self.n_feats_)
 
         # Reshaping and getting coefficients
         if self.fit_intercept:
@@ -216,6 +221,9 @@ class TRFEstimator(BaseEstimator):
         if np.ndim(self.alpha) == 0:
             betas = np.reshape(self.coef_, (len(self.lags),
                                             self.n_feats_, self.n_chans_))
+        elif self.alpha_feat:
+            betas = np.reshape(self.coef_, (len(self.lags),
+                                            self.n_feats_, self.n_chans_, np.power(len(self.alpha), self.n_feats_)))
         else:
             betas = np.reshape(self.coef_, (len(self.lags),
                                             self.n_feats_, self.n_chans_, len(self.alpha)))
@@ -285,7 +293,7 @@ class TRFEstimator(BaseEstimator):
         self.fit_intercept = False
         self.intercept_ = None
         self.coef_ = _ridge_fit_SVD(
-            self.XtX_, self.XtY_, self.alpha, from_cov=True)
+            self.XtX_, self.XtY_, self.alpha, from_cov=True, alpha_feat = self.alpha_feat, n_feat = self.n_feats_)
         self.fitted = True
 
         if clear_after:
@@ -352,7 +360,8 @@ class TRFEstimator(BaseEstimator):
         self.fit_intercept = False
         self.intercept_ = None
         self.coef_ = _ridge_fit_SVD(
-            self.XtX_, self.XtY_, self.alpha, from_cov=True)
+            self.XtX_, self.XtY_, self.alpha, from_cov=True,
+            alpha_feat = self.alpha_feat, n_feat=self.n_feats_)
         self.fitted = True
 
         if clear_after:
@@ -422,15 +431,22 @@ class TRFEstimator(BaseEstimator):
             Score value computed on whole segment.
         """
         yhat = self.predict(Xtest)
+        if self.alpha_feat:
+            reg_len = np.power(len(self.alpha), self.n_feats_)
+        else:
+            reg_len = len(self.alpha)
         if scoring == 'corr':
-            self.scores = np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(len(self.alpha))], axis=-1)
-            return np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(len(self.alpha))], axis=-1)
+            scores = np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
         elif scoring == 'rmse':
-            self.scores = np.stack([_rmse_multifeat(yhat[..., a], ytrue) for a in range(len(self.alpha))], axis=-1)
-            return np.stack([_rmse_multifeat(yhat[..., a], ytrue) for a in range(len(self.alpha))], axis=-1)
+            scores = np.stack([_rmse_multifeat(yhat[..., a], ytrue) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
         elif scoring == 'R2':
-            self.scores = np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(len(self.alpha))], axis=-1)**2
-            return np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(len(self.alpha))], axis=-1)**2
+            scores = np.stack([_r2_multifeat(yhat[..., a], ytrue) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
         else:
             raise NotImplementedError(
                 "Only correlation & RMSE scores are valid for now...")
@@ -485,11 +501,16 @@ class TRFEstimator(BaseEstimator):
             self.lags)
         self.n_chans_ = y.shape[1] if y.ndim == 2 else y.shape[2]
 
+        if self.alpha_feat:
+            reg_len = np.power(len(self.alpha), self.n_feats_)
+        else:
+            reg_len = len(self.alpha)
+
         kf = KFold(n_splits=n_splits)
         if segment_length:
             scores = []
         else:
-            scores = np.zeros((n_splits, self.n_chans_, len(self.alpha)))
+            scores = np.zeros((n_splits, self.n_chans_, reg_len))
 
         for kfold, (train, test) in enumerate(kf.split(X)):
             if verbose:
@@ -520,12 +541,12 @@ class TRFEstimator(BaseEstimator):
                 test_segments = test_crop.reshape(
                     int(len(test_crop) / segment_length), -1)
 
-                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :]) for i in range(
+                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :], scoring=scoring) for i in range(
                     test_segments.shape[0])]  # Evaluate each segment
 
                 scores.append(ccs)
             else:  # Evaluate using the entire testing data
-                scores[kfold, :] = self.score(X[test, :], y[test, :])
+                scores[kfold, :] = self.score(X[test, :], y[test, :], scoring=scoring)
 
         if segment_length:
             scores = np.asarray(scores)

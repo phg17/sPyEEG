@@ -329,6 +329,7 @@ class iRRREstimator(BaseEstimator):
         A = [Ak/w for Ak,w in zip(A,self.weight)]
         B = [Bk/w for Bk,w in zip(B,self.weight)]
         C = np.vstack(A)
+        D = np.vstack(B)
         mu = (mu.T - meanX@C).T
 
         
@@ -340,7 +341,7 @@ class iRRREstimator(BaseEstimator):
         self.rec_obj_ = rec_obj[:niter+1]
         self.rec_rank_ = rec_rank[:niter]
 
-        return A,B,C,mu,Theta
+        return A,B,C,D,mu,Theta
 
     def fit(self, X, y, lagged=False, drop=True, param_dict = dict(), feat_names = (), verbose = False):
         """
@@ -398,17 +399,20 @@ class iRRREstimator(BaseEstimator):
         A_all = np.zeros([self.n_feats_,self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
         B_all = np.zeros([self.n_feats_,self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
         C_all = np.zeros([self.n_feats_*self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
+        D_all = np.zeros([self.n_feats_*self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
 
         for l0_i, l0 in enumerate(self.lambda0):
             for l1_i, l1 in enumerate(self.lambda1):
-                A, B, C, mu, Theta = self.ADMM(X, y, l0, l1, verbose=verbose)
+                A, B, C, D, mu, Theta = self.ADMM(X, y, l0, l1, verbose=verbose)
                 A_all[:, :, :, l0_i, l1_i] = A
                 B_all[:, :, :, l0_i, l1_i] = B
                 C_all[:, :, l0_i, l1_i] = C
+                D_all[:, :, l0_i, l1_i] = D
         
         self.lowrankcoef_ = A_all
         self.highrankcoef_ = B_all
-        self.stackcoef_ = C_all
+        self.stacklowrankcoef_ = C_all
+        self.stackhighrankcoef_ = D_all
 
         self.fitted = True
 
@@ -429,12 +433,14 @@ class iRRREstimator(BaseEstimator):
         return betas_high, betas_low
     
 
-    def predict(self, X):
+    def predict(self, X, lowrank = True):
         """Compute output based on fitted coefficients and feature matrix X.
         Parameters
         ----------
         X : ndarray
             Matrix of features (can be already lagged or not).
+        lowrank : str
+            Whether to compute with the low or not
         Returns
         -------
         ndarray
@@ -446,8 +452,10 @@ class iRRREstimator(BaseEstimator):
         is large).
         """
         assert self.fitted, "Fit model first!"
-
-        betas = self.stackcoef_
+        if lowrank:
+            betas = self.stacklowrankcoef_
+        else:
+            betas = self.stackhighrankcoef_
 
         # Check if input has been lagged already, if not, do it:
         if X.shape[1] != len(self.lags) * self.n_feats_:
@@ -460,7 +468,7 @@ class iRRREstimator(BaseEstimator):
         return pred  # Shape T x Nchan x n_lambda0 x n_lambda1
     
 
-    def score(self, Xtest, ytrue, scoring="corr"):
+    def score(self, Xtest, ytrue, scoring="corr", lowrank = True):
         """Compute a score of the model given true target and estimated target from Xtest.
         Parameters
         ----------
@@ -475,34 +483,38 @@ class iRRREstimator(BaseEstimator):
         float
             Score value computed on whole segment.
         """
-        yhat = self.predict(Xtest)
+        yhat = self.predict(Xtest, lowrank = lowrank)
         if scoring == 'corr':
             scores_ij = np.array([[_corr_multifeat(yhat[..., i, j], ytrue, nchans=self.n_chans_)
                                 for j in range(len(self.lambda1))] for i in range(len(self.lambda0))])
             # Stack along a new last axis, keeping i and j as separate dimensions
-            self.scores = np.transpose(np.stack(scores_ij, axis=-1),(1,2,0))
+            scores = np.transpose(np.stack(scores_ij, axis=-1),(1,2,0))
+            self.scores = scores
             # Return this array as the result
-            return self.scores
+            return scores
         
         elif scoring == 'rmse':
             scores_ij = np.array([[_rmse_multifeat(yhat[..., i, j], ytrue, nchans=self.n_chans_)
                                 for j in range(len(self.lambda1))] for i in range(len(self.lambda0))])
             # Stack along a new last axis, keeping i and j as separate dimensions
-            self.scores = np.transpose(np.stack(scores_ij, axis=-1),(1,2,0))
+            scores = np.transpose(np.stack(scores_ij, axis=-1),(1,2,0))
+            self.scores = scores
             # Return this array as the result
-            return self.scores
+            return scores
         elif scoring == 'R2':
-            scores_ij = np.array([[_corr_multifeat(yhat[..., i, j], ytrue, nchans=self.n_chans_)
+            scores_ij = np.array([[r2_multifeat(yhat[..., i, j], ytrue)
                                 for j in range(len(self.lambda1))] for i in range(len(self.lambda0))])
             # Stack along a new last axis, keeping i and j as separate dimensions
-            self.scores = np.transpose(np.stack(scores_ij, axis=-1),(1,2,0))
+            scores = np.transpose(np.stack(scores_ij, axis=-1),(1,2,0))
+            self.scores = scores
             # Return this array as the result
-            return self.scores**2
+            return scores
         else:
             raise NotImplementedError(
                 "Only correlation, R2 & RMSE scores are valid for now...")
         
-    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="corr", segment_length=None, fit_mode='direct', verbose=True):
+    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="corr", 
+                  lowrank = True, segment_length=None, fit_mode='direct', verbose=True):
         '''
         Standard cross-validation. Scoring
         Parameters
@@ -576,12 +588,12 @@ class iRRREstimator(BaseEstimator):
                 test_segments = test_crop.reshape(
                     int(len(test_crop) / segment_length), -1)
 
-                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :]) for i in range(
+                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :], lowrank = True) for i in range(
                     test_segments.shape[0])]  # Evaluate each segment
 
                 scores.append(ccs)
             else:  # Evaluate using the entire testing data
-                scores[kfold, :] = self.score(X[test, :], y[test, :])
+                scores[kfold, :] = self.score(X[test, :], y[test, :], lowrank = True)
 
         if segment_length:
             scores = np.asarray(scores)
