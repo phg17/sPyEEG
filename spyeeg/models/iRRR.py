@@ -23,7 +23,7 @@ from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing, cen
 from ..viz import get_spatial_colors
 from scipy import linalg
 import mne
-from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _objective_value, _soft_threshold
+from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _objective_value, _soft_threshold, _r2_multifeat
 from scipy.linalg import pinv, svd, norm, svdvals
 
 MEM_CAP = 0.9  # Memory cap for the iRRR model (in GB)
@@ -319,11 +319,11 @@ class iRRREstimator(BaseEstimator):
             diff = max(primal,self.rho*dual) # primal
 
             rec_rank[niter] = np.linalg.matrix_rank(cA)
-
-        if niter==self.Niter:
-            print(f'iRRR does NOT converge after {self.Niter} iterations!')
-        else:
-            print(f'iRRR converges after {niter} iterations.')
+        if verbose:
+            if niter==self.Niter:
+                print(f'iRRR does NOT converge after {self.Niter} iterations!')
+            else:
+                print(f'iRRR converges after {niter} iterations.')
 
         # rescale parameter estimate, add back mean
         A = [Ak/w for Ak,w in zip(A,self.weight)]
@@ -432,7 +432,6 @@ class iRRREstimator(BaseEstimator):
 
         return betas_high, betas_low
     
-
     def predict(self, X, lowrank = True):
         """Compute output based on fitted coefficients and feature matrix X.
         Parameters
@@ -467,7 +466,6 @@ class iRRREstimator(BaseEstimator):
 
         return pred  # Shape T x Nchan x n_lambda0 x n_lambda1
     
-
     def score(self, Xtest, ytrue, scoring="corr", lowrank = True):
         """Compute a score of the model given true target and estimated target from Xtest.
         Parameters
@@ -502,7 +500,7 @@ class iRRREstimator(BaseEstimator):
             # Return this array as the result
             return scores
         elif scoring == 'R2':
-            scores_ij = np.array([[r2_multifeat(yhat[..., i, j], ytrue)
+            scores_ij = np.array([[_r2_multifeat(yhat[..., i, j], ytrue)
                                 for j in range(len(self.lambda1))] for i in range(len(self.lambda0))])
             # Stack along a new last axis, keeping i and j as separate dimensions
             scores = np.transpose(np.stack(scores_ij, axis=-1),(1,2,0))
@@ -513,7 +511,7 @@ class iRRREstimator(BaseEstimator):
             raise NotImplementedError(
                 "Only correlation, R2 & RMSE scores are valid for now...")
         
-    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="corr", 
+    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=False, scoring="corr", 
                   lowrank = True, segment_length=None, fit_mode='direct', verbose=True):
         '''
         Standard cross-validation. Scoring
@@ -588,12 +586,12 @@ class iRRREstimator(BaseEstimator):
                 test_segments = test_crop.reshape(
                     int(len(test_crop) / segment_length), -1)
 
-                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :], lowrank = True) for i in range(
+                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :], lowrank = True, scoring = scoring) for i in range(
                     test_segments.shape[0])]  # Evaluate each segment
 
                 scores.append(ccs)
             else:  # Evaluate using the entire testing data
-                scores[kfold, :] = self.score(X[test, :], y[test, :], lowrank = True)
+                scores[kfold, :] = self.score(X[test, :], y[test, :], lowrank = True, scoring = scoring)
 
         if segment_length:
             scores = np.asarray(scores)

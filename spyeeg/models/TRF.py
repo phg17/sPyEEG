@@ -194,6 +194,7 @@ class TRFEstimator(BaseEstimator):
         # Preprocess and lag inputs
         X, y = self.get_XY(X, y, lagged, drop, feat_names)
 
+
         # Adding intercept feature:
         if self.fit_intercept:
             X = np.hstack([np.ones((len(X), 1)), X])
