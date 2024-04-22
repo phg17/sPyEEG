@@ -23,6 +23,7 @@ from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing, cen
 from ..viz import get_spatial_colors
 from scipy import linalg
 import mne
+from numpy.random import randn
 from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _objective_value, _soft_threshold, _r2_multifeat
 from scipy.linalg import pinv, svd, norm, svdvals
 
@@ -77,6 +78,16 @@ class iRRREstimator(BaseEstimator):
         self.XtX_ = None
         # Covariance matrix of features X and Y (thus XtX) -> used for computing model using fit_from_cov
         self.XtY_ = None
+
+        # Fit Attributes
+        self.weight = None
+        self.randomstart = None
+        self.varyrho = None
+        self.maxrho = None
+        self.rho = None
+        self.tol = None
+        self.Niter = None
+        self.pre_fit = None
 
         # Coefficients of the iRRR
         self.lambda0 = lambda0
@@ -195,6 +206,7 @@ class iRRREstimator(BaseEstimator):
         """
         self.weight = param_dict.get('weight',np.ones((self.n_feats_,1)))
         self.randomstart = param_dict.get('randomstart',False)
+        self.pre_fit = param_dict.get('pre_fit',False)
         self.varyrho = param_dict.get('varyrho',False)
         self.maxrho = param_dict.get('maxrho',5)
         self.rho = param_dict.get('rho',0.1)
@@ -228,8 +240,7 @@ class iRRREstimator(BaseEstimator):
             B = [Bk*wk for Bk,wk in zip(self.randomstart,self.weight)]
         # if randomstart is True, B is initialize using random values
         elif self.randomstart:
-            B = [randn(pk,q) for pk in self.n_featlags_]
-        # if randomstart is False, B is initialize using vanilla OLS
+            B = [randn(pk,self.n_chans_) for pk in self.n_featlags_]
         else:
             B = [pinv(Xk.T @ Xk) @ Xk.T @ wy for Xk in X] # OLS
 
@@ -253,6 +264,36 @@ class iRRREstimator(BaseEstimator):
         return obj, A,cA, cB, Theta, cTheta, DeltaMat
         
     def ADMM(self,X,y,l0,l1,verbose=False):
+        '''
+        Alternating Direction Method of Multipliers for fitting iRRR
+        Parameters
+        ----------
+        X : list of ndarray (nfeats x nlags)
+            List of lagged feature matrices
+        y : ndarray (nsamples x nchans)
+            The dependent variable (EEG data)
+        l0 : float
+            Regularization parameter, tuning for ridge penalty
+        l1 : float
+            Regularization parameter, tuning for nuclear norm
+        verbose : bool
+            Default: False
+            Whether to print out the progress of the fitting
+        Returns
+        -------
+        A : list of ndarray (nfeats x nchans)
+            Coefficients of the low-rank part of the iRRR
+        B : list of ndarray (nfeats x nchans)
+            Coefficients of the high-rank part of the iRRR
+        C : ndarray (nfeats x nchans)
+            Stacked coefficients of the low-rank part of the iRRR
+        D : ndarray (nfeats x nchans)
+            Stacked coefficients of the high-rank part of the iRRR
+        mu : ndarray (nchans x 1)
+            Mean of the dependent variable (intercept)
+        Theta : list of ndarray (nfeats x nchans)
+            Lagrange parameters when fitting iRRR
+        '''
         
         obj_init, A, cA, cB, Theta, cTheta, DeltaMat = self.initialization(X,y,l0,l1)
         # Column center Xk's and normalize by the weights
@@ -395,12 +436,13 @@ class iRRREstimator(BaseEstimator):
         # Fill fitting parameters attributes
         self.fill_attributes_fit(param_dict)
 
-        # Initialize the model
+        # Initialize the coefficients
         A_all = np.zeros([self.n_feats_,self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
         B_all = np.zeros([self.n_feats_,self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
         C_all = np.zeros([self.n_feats_*self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
         D_all = np.zeros([self.n_feats_*self.n_featlags_[0], self.n_chans_,len(self.lambda0),len(self.lambda1)])
 
+        # Compute for all Ridge(lambda0) and rank reduction(lambda1) regularization parameters
         for l0_i, l0 in enumerate(self.lambda0):
             for l1_i, l1 in enumerate(self.lambda1):
                 A, B, C, D, mu, Theta = self.ADMM(X, y, l0, l1, verbose=verbose)
