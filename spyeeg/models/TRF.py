@@ -11,6 +11,7 @@ from ..viz import get_spatial_colors
 from scipy import linalg
 import mne
 from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat
+from matplotlib import colormaps as cmaps
 
 # Memory cap (i.e. max usage).
 # By default set to 90% to prevent bricking machines in corner cases...
@@ -561,6 +562,7 @@ class TRFEstimator(BaseEstimator):
                                   part_length=part_lenght)
             else:
                 self.fit(X, y)
+        self.scores = scores
 
         return scores
 
@@ -694,4 +696,32 @@ class TRFEstimator(BaseEstimator):
                     for kc, l in enumerate(lines):
                         l.set_color(colors[kc])
 
-        return fig
+        return fig,ax
+
+    def plot_score(self, figax = None, figsize = (5,5), color_type = 'jet', 
+                   channels = None, title = 'R2 sumary'):
+        if figax == None:
+            fig,ax = plt.subplots(figsize = figsize)
+        else:
+            fig,ax = figax
+        if channels == None:
+            channels = np.arange(self.scores.shape[1])
+
+        #Extract Coef
+        color_map = dict()
+        for index_channel in range(self.scores.shape[1]):
+            color_map[index_channel] = cmaps[color_type](index_channel/self.scores.shape[1])
+
+        for index_channel in range(self.scores.shape[1]):
+            score_chan = np.mean(self.scores[:,index_channel,:],axis = 0)
+            ax.plot(self.alpha, score_chan, color = color_map[index_channel], linewidth = 1.5, label = channels[index_channel])
+            ax.set_title(title)
+            ax.set_xlabel('Alpha')
+            ax.set_ylabel('R2')
+            ax.set_xticks(self.alpha)
+            ax.set_xscale('log')
+        ax.plot(self.alpha, np.mean(self.scores[:,:,:],axis = (0,1)), color = 'k', linewidth = 3, linestyle = '--')
+        ax.legend()
+
+
+        return fig, ax
