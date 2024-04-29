@@ -708,7 +708,7 @@ class TRFEstimator(BaseEstimator):
         return fig,ax
 
     def plot_score(self, figax = None, figsize = (5,5), color_type = 'jet', 
-                   channels = None, title = 'R2 sumary'):
+                   channels = None, title = 'R2 sumary', minR2 = -np.inf):
         if figax == None:
             fig,ax = plt.subplots(figsize = figsize)
         else:
@@ -723,12 +723,13 @@ class TRFEstimator(BaseEstimator):
 
         for index_channel in range(self.scores.shape[1]):
             score_chan = np.mean(self.scores[:,index_channel,:],axis = 0)
-            ax.plot(self.alpha, score_chan, color = color_map[index_channel], linewidth = 1.5, label = channels[index_channel])
-            ax.set_title(title)
-            ax.set_xlabel('Alpha')
-            ax.set_ylabel('R2')
-            ax.set_xticks(self.alpha)
-            ax.set_xscale('log')
+            if np.max(score_chan > minR2):
+                ax.plot(self.alpha, score_chan, color = color_map[index_channel], linewidth = 1.5, label = channels[index_channel])
+        ax.set_title(title)
+        ax.set_xlabel('Alpha')
+        ax.set_ylabel('R2')
+        ax.set_xticks(self.alpha)
+        ax.set_xscale('log')
         ax.plot(self.alpha, np.mean(self.scores[:,:,:],axis = (0,1)), color = 'k', linewidth = 3, linestyle = '--')
         ax.legend()
 
@@ -736,7 +737,7 @@ class TRFEstimator(BaseEstimator):
         return fig, ax
 
     def plot_kernel(self, figax = None, figsize = (15,15), color_type = 'jet', center_line = True,
-                    channels = None, features = None, title = 'kernel sumary'):
+                    channels = None, features = None, title = 'kernel sumary', minR2 = -np.inf):
         """Plot the TRF of the feature requested as a *butterfly* plot"""
         if figax == None:
             fig,ax = plt.subplots(self.n_feats_,figsize = figsize, sharex = True)
@@ -757,9 +758,11 @@ class TRFEstimator(BaseEstimator):
             for chan_index in range(self.n_chans_):
                 alpha_index = best_alpha[chan_index]
                 chan = channels[chan_index]
-                ax[feat_index].plot(self.times, self.get_coef()[:,feat_index,chan_index, alpha_index], color = color_map[chan_index], linewidth = 1.5, label = chan)
-                ax[feat_index].set_xlabel('Time (s)')
-                ax[feat_index].set_ylabel(feat)
+                score_chan = np.mean(self.scores[:,chan_index,:],axis = 0)
+                if np.max(score_chan > minR2):
+                    ax[feat_index].plot(self.times, self.get_coef()[:,feat_index,chan_index, alpha_index], color = color_map[chan_index], linewidth = 1.5, label = chan)
+                    ax[feat_index].set_xlabel('Time (s)')
+                    ax[feat_index].set_ylabel(feat)
             if center_line:
                 ax[feat_index].plot([0,0],[np.min(self.get_coef()[:,feat_index,:, alpha_index]),np.max(self.get_coef()[:,feat_index,:, alpha_index])], color = 'k', linewidth = 1.5, linestyle = '--')
         handles, labels = ax[1].get_legend_handles_labels()
@@ -768,4 +771,3 @@ class TRFEstimator(BaseEstimator):
         return fig,ax
 
 
-        
