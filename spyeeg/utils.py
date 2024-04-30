@@ -452,12 +452,8 @@ def lag_finder(y1, y2, Fs):
 
 
 def get_timing(spikes):
-    "return timing of spikes"
-    timing = []
-    for i in range(len(spikes)):
-        if spikes[i] == 1:
-            timing.append(i)
-    return timing
+    "Return timing of spikes"
+    return np.asarray([[i, spike] for i, spike in enumerate(spikes) if spike > 0]).T
 
 
 def compression_eeg(x, comp_fact=1):

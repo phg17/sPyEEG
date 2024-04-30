@@ -8,92 +8,77 @@ import numpy as np
 import matplotlib.pyplot as plt
 from ..utils import lag_span, lag_sparse, get_timing
 import mne
+from matplotlib import colormaps as cmaps
 
 
 class ERP_class():
-    def __init__(self, tmin, tmax, srate, n_chan=63):
+    def __init__(self, tmin, tmax, srate):
         self.srate = srate
         self.tmin = tmin
         self.tmax = tmax
         self.window = lag_span(tmin, tmax, srate)
         self.times = self.window/srate
-        self.ERP = np.zeros(len(self.window))
-        self.mERP = np.zeros([len(self.window), n_chan])
-        self.single_events = []
-        self.single_events_mult = []
-        self.peak_time = None
-        self.peak_arg = None
+        self.events = None
+        self.weights = None
+        self.evoked = None
+        self.mERP = None
+        self.n_chans_ = None
 
-    def add_data(self, eeg, events, event_type='spikes'):
+    def add_events(self, eeg, events, event_type='spikes', weight_events = False, ignore_limit = False, scale_weights = True):
 
-        if event_type == 'spikes':
-            events_list = get_timing(events)
+        self.n_chans_ = eeg.shape[1]
+        self.mERP = np.zeros([len(self.window), self.n_chans_])
+        self.evoked = []
+        self.weights = []
+        self.events = []
+
+        n_events = 0
+        events, weights = get_timing(events)
+        if not weight_events:
+            weights = np.ones(len(events))
+
+        for i in range(len(events)):
+                event = int(events[i])
+                weight = weights[i]
+
+                if event + self.window[-1] < eeg.shape[0]:
+                    data = eeg[self.window + event, :] * weight
+                    self.mERP += data
+                    self.evoked.append(data)
+                    self.events.append(event)
+                    self.weights.append(weight)
+                    n_events += 1
+        self.mERP /= n_events
+
+    def add_continuous_signal(self, eeg, events, step = None):
+
+
+
+
+    def plot_ERP(self, figax = None, figsize = (10,5), color_type = 'jet', center_line = True,
+                    channels = None, features = None, title = 'ERP'):
+        """Plot the TRF of the feature requested as a *butterfly* plot"""
+        if figax == None:
+            fig,ax = plt.subplots(figsize = figsize, sharex = True)
         else:
-            events_list = events
+            fig,ax = figax
+        if channels == None:
+            channels = np.arange(self.n_chans_)
 
-        # for i in np.where(events_list < eeg.shape[0] - self.window[-1])[0]:
-        for i in range(len(events_list)):
-            try:
-                event = events_list[i]
-                self.ERP += np.sum((eeg[self.window + event]), axis=1)
-                self.mERP += eeg[self.window + event, :]
-                self.single_events.append(
-                    np.sum((eeg[self.window + event]), axis=1))
-            except:
-                print('out of window')
-        self.peak_time = np.argmax(self.ERP) / self.srate + self.tmin
-        self.peak_arg = np.argmax(self.ERP) + self.tmin * self.srate
+        color_map = dict()
+        for index_channel in range(self.n_chans_):
+            color_map[index_channel] = cmaps[color_type](index_channel/self.n_chans_)
 
-    def weight_data(self, eeg, cont_stim):
 
-        # for i in np.where(events_list < eeg.shape[0] - self.window[-1])[0]:
-        for i in range(len(cont_stim)):
-            try:
-                w = cont_stim[i]
-                self.ERP += np.sum((w * eeg[self.window + i]), axis=1)
-                self.mERP += w * eeg[self.window + i, :]
-                self.single_events.append(
-                    np.sum(np.abs(w * eeg[self.window + i]), axis=1))
-                self.single_events_mult.append((w * eeg[self.window + i]))
-            except:
-                pass
+        for chan_index in range(self.n_chans_):
+            chan = channels[chan_index]
+            ax.plot(self.window, self.mERP[:,chan_index], color = color_map[chan_index], linewidth = 1.5, label = chan)
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('ERP (V)')
+        if center_line:
+            ax.plot([0,0],[np.min(self.mERP),np.max(self.mERP)], color = 'k', linewidth = 1.5, linestyle = '--')
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles, labels, bbox_to_anchor=(1.15, 0.8),loc='right')
+        ax.set_title(title)
+        return fig,ax
 
-    def inverse_weight_data(self, eeg, cont_stim):
-
-        for n_chan in range(63):
-            for t in range(len(cont_stim)):
-                try:
-                    w = eeg[t, n_chan]
-                    self.mERP[:, n_chan] += w * cont_stim[self.window + t, 0]
-                except:
-                    pass
-        self.ERP = np.sum(self.mERP, axis=1)
-
-    def plot_simple(self):
-        plt.figure()
-        plt.plot(self.times, self.ERP)
-
-    def plot_multi(self):
-        plt.figure()
-        plt.plot(self.times, self.mERP)
-
-    def plot_topo(self, raw_info, Fs, time=None):
-
-        f, (ax1, ax2) = plt.subplots(1, 2)
-        f.set_figwidth(10)
-        if not time:
-            t = [np.argmin(self.ERP), np.argmax(self.ERP)]
-        else:
-            t = [int((time[0] - self.tmin)*Fs), int((time[1] - self.tmin)*Fs)]
-
-        # Visualize topography max
-        mne.viz.plot_topomap(
-            self.mERP[t[0], :], raw_info, axes=ax1, cmap='RdBu_r', show=False)
-        ax1.set_title('tlag={} ms'.format(
-            int((t[0]/self.srate + self.tmin)*1000)))
-
-        # Visualize topography min
-        mne.viz.plot_topomap(
-            self.mERP[t[1], :], raw_info, axes=ax2, cmap='RdBu_r', show=False)
-        ax2.set_title('tlag={} ms'.format(
-            int((t[1]/self.srate + self.tmin)*1000)))
