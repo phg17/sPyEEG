@@ -708,12 +708,12 @@ class TRFEstimator(BaseEstimator):
         return fig,ax
 
     def plot_score(self, figax = None, figsize = (5,5), color_type = 'jet', 
-                   channels = None, title = 'R2 sumary', minR2 = -np.inf):
+                   channels = [], title = 'R2 sumary', minR2 = -np.inf):
         if figax == None:
             fig,ax = plt.subplots(figsize = figsize)
         else:
             fig,ax = figax
-        if channels == None:
+        if len(channels) == 0:
             channels = np.arange(self.scores.shape[1])
 
         #Extract Coef
