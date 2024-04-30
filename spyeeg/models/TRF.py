@@ -736,9 +736,11 @@ class TRFEstimator(BaseEstimator):
 
         return fig, ax
 
-    def plot_kernel(self, figax = None, figsize = (15,15), color_type = 'jet', center_line = True,
+    def plot_kernel(self, figax = None, figsize = False, color_type = 'jet', center_line = True,
                     channels = None, features = None, title = 'kernel sumary', minR2 = -np.inf):
         """Plot the TRF of the feature requested as a *butterfly* plot"""
+        if not figsize:
+            figsize = (15, (self.n_feats_) * 4)
         if figax == None:
             fig,ax = plt.subplots(self.n_feats_,figsize = figsize, sharex = True)
         else:
@@ -748,6 +750,7 @@ class TRFEstimator(BaseEstimator):
         if features == None:
             features = np.arange(self.n_feats_)
 
+
         color_map = dict()
         for index_channel in range(self.n_chans_):
             color_map[index_channel] = cmaps[color_type](index_channel/self.n_chans_)
@@ -755,19 +758,27 @@ class TRFEstimator(BaseEstimator):
         best_alpha = self.get_best_alpha()
         for feat_index in range(self.n_feats_):
             feat = features[feat_index]
+            if self.n_feats_ > 1:
+                axfeat = ax[feat_index]
+            else:
+                axfeat = ax
             for chan_index in range(self.n_chans_):
                 alpha_index = best_alpha[chan_index]
                 chan = channels[chan_index]
                 score_chan = np.mean(self.scores[:,chan_index,:],axis = 0)
                 if np.max(score_chan > minR2):
-                    ax[feat_index].plot(self.times, self.get_coef()[:,feat_index,chan_index, alpha_index], color = color_map[chan_index], linewidth = 1.5, label = chan)
-                    ax[feat_index].set_xlabel('Time (s)')
-                    ax[feat_index].set_ylabel(feat)
+
+                    axfeat.plot(self.times, self.get_coef()[:,feat_index,chan_index, alpha_index], color = color_map[chan_index], linewidth = 1.5, label = chan)
+                    axfeat.set_xlabel('Time (s)')
+                    axfeat.set_ylabel(feat)
             if center_line:
-                ax[feat_index].plot([0,0],[np.min(self.get_coef()[:,feat_index,:, alpha_index]),np.max(self.get_coef()[:,feat_index,:, alpha_index])], color = 'k', linewidth = 1.5, linestyle = '--')
-        handles, labels = ax[1].get_legend_handles_labels()
+                axfeat.plot([0,0],[np.min(self.get_coef()[:,feat_index,:, alpha_index]),np.max(self.get_coef()[:,feat_index,:, alpha_index])], color = 'k', linewidth = 1.5, linestyle = '--')
+        handles, labels = axfeat.get_legend_handles_labels()
         fig.legend(handles, labels, bbox_to_anchor=(1.15, 0.8),loc='right')
-        ax[0].set_title(title)
+        if self.n_feats_ > 1:
+            ax[0].set_title(title)
+        else:
+            ax.set_title(title)
         return fig,ax
 
 
