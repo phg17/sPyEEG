@@ -32,7 +32,6 @@ class ERP_class():
         self.weights = []
         self.events = []
 
-        n_events = 0
         events, weights = get_timing(events)
         if not weight_events:
             weights = np.ones(len(events))
@@ -47,13 +46,35 @@ class ERP_class():
                     self.evoked.append(data)
                     self.events.append(event)
                     self.weights.append(weight)
-                    n_events += 1
-        self.mERP /= n_events
+                    
+        self.mERP /= len(self.events)
 
-    def add_continuous_signal(self, eeg, events, step = None):
+    def add_continuous_signal(self, eeg, signal, step = None, weight_events = True):
+        if step is None:
+            step = len(self.window)
+        self.n_chans_ = eeg.shape[1]
+        self.mERP = np.zeros([len(self.window), self.n_chans_])
+        self.evoked = []
+        self.weights = []
+        self.events = []
+
+        event = 0
+        while event + self.window[-1] < eeg.shape[0]:
+            if weight_events:
+                weight = signal[event]
+            else:
+                weight = 1
+            data = weight * eeg[self.window + event, :]
+            self.mERP += data
+            self.evoked.append(data)
+            self.events.append(event)
+            self.weights.append(weight)
+            event += step
+
+        self.mERP /= len(self.events)
 
 
-
+    
 
     def plot_ERP(self, figax = None, figsize = (10,5), color_type = 'jet', center_line = True,
                     channels = None, features = None, title = 'ERP'):
@@ -72,7 +93,7 @@ class ERP_class():
 
         for chan_index in range(self.n_chans_):
             chan = channels[chan_index]
-            ax.plot(self.window, self.mERP[:,chan_index], color = color_map[chan_index], linewidth = 1.5, label = chan)
+            ax.plot(self.window/self.srate, self.mERP[:,chan_index], color = color_map[chan_index], linewidth = 1.5, label = chan)
             ax.set_xlabel('Time (s)')
             ax.set_ylabel('ERP (V)')
         if center_line:

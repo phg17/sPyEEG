@@ -741,7 +741,7 @@ class TRFEstimator(BaseEstimator):
         """Plot the TRF of the feature requested as a *butterfly* plot"""
         if not figsize:
             figsize = (15, (self.n_feats_) * 4)
-        if figax == None:
+        if figax is None:
             fig,ax = plt.subplots(self.n_feats_,figsize = figsize, sharex = True)
         else:
             fig,ax = figax
