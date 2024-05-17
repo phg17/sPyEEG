@@ -166,8 +166,8 @@ class B2B(BaseEstimator):
         return X, y
 
     def fit(self, X, y, lagged=False, drop=True, feat_names=()):
-        """Fit the TRF model.
-        Mapping X -> y. Note the convention of timelags and type of model for seamless recovery of coefficients.
+        """Fit the B2B model.
+        First we map y -> X. Note the convention of timelags implies y is not 
         Parameters
         ----------
         X : ndarray (nsamples x nfeats)
