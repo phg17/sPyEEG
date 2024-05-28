@@ -24,7 +24,7 @@ class ERP_class():
         self.mERP = None
         self.n_chans_ = None
 
-    def add_events(self, eeg, events, event_type='spikes', weight_events = False, ignore_limit = False, scale_weights = True):
+    def add_events(self, eeg, events, event_type='spikes', weight_events = False, record_weight = True, ignore_limit = False, scale_weights = True):
 
         self.n_chans_ = eeg.shape[1]
         self.mERP = np.zeros([len(self.window), self.n_chans_])
@@ -33,7 +33,7 @@ class ERP_class():
         self.events = []
 
         events, weights = get_timing(events)
-        if not weight_events:
+        if not weight_events and not record_weight :
             weights = np.ones(len(events))
 
         for i in range(len(events)):
@@ -41,7 +41,10 @@ class ERP_class():
                 weight = weights[i]
 
                 if event + self.window[-1] < eeg.shape[0]:
-                    data = eeg[self.window + event, :] * weight
+                    if weight_events:
+                        data = eeg[self.window + event, :] * weight
+                    else:
+                        data = eeg[self.window + event, :] 
                     self.mERP += data
                     self.evoked.append(data)
                     self.events.append(event)
