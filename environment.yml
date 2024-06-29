@@ -37,7 +37,3 @@ dependencies:
 - python-picard
 - pyqt
 - mne
-- mffpy>=0.5.7
-- obspy
-- pip:
-  - praat-parselmouth
