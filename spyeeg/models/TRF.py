@@ -417,7 +417,7 @@ class TRFEstimator(BaseEstimator):
 
         return pred  # Shape T x Nchan x Alpha
 
-    def score(self, Xtest, ytrue, scoring="corr"):
+    def score(self, Xtest, ytrue, scoring="R2"):
         """Compute a score of the model given true target and estimated target from Xtest.
         Parameters
         ----------
@@ -453,7 +453,7 @@ class TRFEstimator(BaseEstimator):
             raise NotImplementedError(
                 "Only correlation & RMSE scores are valid for now...")
 
-    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="corr", segment_length=None, fit_mode='direct', verbose=True):
+    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="R2", segment_length=None, fit_mode='direct', verbose=True):
         '''
         Standard cross-validation. Scoring
         Parameters
@@ -646,68 +646,8 @@ class TRFEstimator(BaseEstimator):
                 best_alpha[chan] = np.argmax(self.scores[:,chan,:],axis=0)
         return best_alpha.astype(int)
 
-    def plot(self, feat_id=None, alpha_id=None, ax=None, spatial_colors=False, info=None, **kwargs):
-        """Plot the TRF of the feature requested as a *butterfly* plot.
-        Parameters
-        ----------
-        feat_id : list or int
-            Index of the feature requested or list of features.
-            Default is to use all features.
-        ax : array of axes (flatten)
-            list of subaxes
-        **kwargs : **dict
-            Parameters to pass to :func:`plt.subplots`
-        Returns
-        -------
-        fig : figure
-        """
-        if isinstance(feat_id, int):
-            # cast into list to be able to use min, len, etc...
-            feat_id = list(feat_id)
-            if ax is not None:
-                fig = ax.figure
-        if not feat_id:
-            feat_id = range(self.n_feats_)
-        if len(feat_id) > 1:
-            if ax is not None:
-                fig = ax[0].figure
-        assert self.fitted, "Fit the model first!"
-        assert all([min(feat_id) >= 0, max(feat_id) <
-                    self.n_feats_]), "Feat ids not in range"
 
-        if ax is None:
-            if 'figsize' not in kwargs.keys():
-                fig, ax = plt.subplots(nrows=1, ncols=np.size(feat_id), figsize=(
-                    plt.rcParams['figure.figsize'][0] * np.size(feat_id), plt.rcParams['figure.figsize'][1]), **kwargs)
-            else:
-                fig, ax = plt.subplots(
-                    nrows=1, ncols=np.size(feat_id), **kwargs)
-
-        if spatial_colors:
-            assert info is not None, "To use spatial colouring, you must supply raw.info instance"
-            colors = get_spatial_colors(info)
-
-        for k, feat in enumerate(feat_id):
-            if len(feat_id) == 1:
-                ax.plot(self.times, self.coef_[:, feat, :])
-                if self.feat_names_:
-                    ax.set_title('TRF for {:s}'.format(self.feat_names_[feat]))
-                if spatial_colors:
-                    lines = ax.get_lines()
-                    for kc, l in enumerate(lines):
-                        l.set_color(colors[kc])
-            else:
-                ax[k].plot(self.times, self.get_coef()[:, feat, :, 0])
-                if self.feat_names_:
-                    ax[k].set_title('{:s}'.format(self.feat_names_[feat]))
-                if spatial_colors:
-                    lines = ax[k].get_lines()
-                    for kc, l in enumerate(lines):
-                        l.set_color(colors[kc])
-
-        return fig,ax
-
-    def plot_score(self, figax = None, figsize = (5,5), color_type = 'jet', 
+    def plot_score(self, figax = None, figsize = (5,5), color_type = 'rainbow', 
                    channels = [], title = 'R2 sumary', minR2 = -np.inf):
         if figax == None:
             fig,ax = plt.subplots(figsize = figsize)
@@ -736,7 +676,7 @@ class TRFEstimator(BaseEstimator):
 
         return fig, ax
 
-    def plot_kernel(self, figax = None, figsize = False, color_type = 'jet', center_line = True,
+    def plot_kernel(self, figax = None, figsize = False, color_type = 'rainbow', center_line = True,
                     channels = None, features = None, title = 'kernel sumary', minR2 = -np.inf):
         """Plot the TRF of the feature requested as a *butterfly* plot"""
         if not figsize:

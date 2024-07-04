@@ -228,7 +228,7 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat 
         alpha = np.asarray(alpha)
 
     # Compute eigenvalues and eigenvectors of covariance matrix XtX
-    S, V = linalg.eigh(XtX, overwrite_a=False, turbo=True)
+    S, V = linalg.eigh(XtX, overwrite_a=False)
 
     # Sort the eigenvalues
     s_ind = np.argsort(S)[::-1]
