@@ -10,8 +10,10 @@ from mne.decoding import BaseEstimator
 from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
 from ..viz import get_spatial_colors
 from scipy import linalg
+from scipy.stats import spearmanr
 import mne
 import itertools
+from time import time as chrono
 
 
 def _get_covmat(x, y):
@@ -34,6 +36,22 @@ def _corr_multifeat(yhat, ytrue, nchans):
     corr_coeffs : 1-D vector (nchan), correlation coefficient for each channel
     '''
     return np.diag(np.corrcoef(x=yhat, y=ytrue, rowvar=False), k=nchans)
+
+
+def _rankcorr_multifeat(yhat, ytrue, nchans):
+    '''
+    Helper functions for computing rank correlation coefficient (Spearman's r) for multiple channels at once.
+    Parameters
+    ----------
+    yhat : ndarray (T x nchan), estimate
+    ytrue : ndarray (T x nchan), reference
+    nchans : number of channels
+    Returns
+    -------
+    corr_coeffs : 1-D vector (nchan), correlation coefficient for each channel
+    '''
+    return np.diag(spearmanr(yhat, ytrue)[0], k=nchans)
+
 
 
 def _rmse_multifeat(yhat, ytrue, axis=0):
@@ -67,122 +85,82 @@ def _r2_multifeat(yhat, ytrue, axis=0):
     r2_scores = 1 - (ss_res / ss_tot)  # R² score for each channel
     return r2_scores
 
+def _ezr2_multifeat(yhat, ytrue, Xtest, window_length, from_cov = False, axis = 0):
+    ss_res = np.sum((ytrue - yhat) ** 2, axis=axis)  # Sum of squares of residuals
+    ss_tot = np.sum((ytrue - np.mean(ytrue, axis=axis)) ** 2, axis=axis)  # Total sum of squares
+    r2_scores = 1 - (ss_res / ss_tot)  # R² score for each channel
 
-def dirac_distance(dirac1, dirac2, Fs, window_size=0.01):
+    n = ytrue.shape[0]
+    p = Xtest.shape[1] * window_length
+    r2_adjusted = 1 - ((1 - r2_scores) * (n - 1) / (n - p - 1))
+
+    return r2_adjusted 
+    
+
+def _adjr2_multifeat(yhat, ytrue, Xtrain, Xtest, alpha, lags, from_cov = False, axis = 0, drop = True):
     '''
-    Fast implementation of victor-purpura spike distance (faster than neo & elephant python packages)
-    Direct Python port of http://www-users.med.cornell.edu/~jdvicto/pubalgor.htmlself.
-    The below code was tested against the original implementation and yielded exact results.
-    All credits go to the authors of the original code.
-    Input:
-        s1,2: pair of vectors of spike times
-        cost: cost parameter for computing Victor-Purpura spike distance.
-        (Note: the above need to have the same units!)
-    Output:
-        d: VP spike distance.
+    Helper function for computing the adjusted coefficient of determination (R²) for multiple channels at once.
+    from Lage et.al 2024, https://www.biorxiv.org/content/10.1101/2024.03.04.583270v1.full.pdf+html.
+    Code repurposed from: https://github.com/mlsttin/adjustingR2
+    Parameters
+    ----------
+    yhat : ndarray (T x nchan), estimate
+    ytrue : ndarray (T x nchan), reference
+    Xtrain: ndarray (T x nfeat), feat matrix of training data
+    Xtest: ndarray (T x nfeat), feat matrix of testing data
+    alpha: a single regularization parameter
+    lags: list of lags, generally provided in the TRF object
+    axis : axis along which to compute the R²
+    Returns
+    -------
+    adj_r2_scores : 1-D vector (nchan), R² for each channel
     '''
-    cost = Fs * window_size
-    s1 = get_timing(dirac1)
-    s2 = get_timing(dirac2)
+    ss_res = np.sum((ytrue - yhat) ** 2, axis=axis)  # Sum of squares of residuals
+    ss_tot = np.sum((ytrue - np.mean(ytrue, axis=axis)) ** 2, axis=axis)  # Total sum of squares
+    r2_scores = 1 - (ss_res / ss_tot)  # non-adjusted R² score for each channel
 
-    nspi = len(s1)
-    nspj = len(s2)
+    Xtrain = lag_matrix(Xtrain, lag_samples=lags,
+               drop_missing=drop, filling=np.nan if drop else 0.)
+    Xtest = lag_matrix(Xtest, lag_samples=lags,
+           drop_missing=drop, filling=np.nan if drop else 0.)
+    
+    ntrain = Xtrain.shape[0]
+    ntest, p = Xtest.shape
+    Cte = np.eye(ntest) - (1./ntest) * np.ones((ntest,1)) @ np.ones((1,ntest))
+    # Compute covariance matrices
+    XtX = _get_covmat(Xtrain, Xtrain)
+    I = np.eye(XtX.shape[0])
 
-    scr = np.zeros((nspi+1, nspj+1))
+    # Compute eigenvalues and eigenvectors of covariance matrix XtX
+    S, V = linalg.eigh(XtX, overwrite_a=False)
 
-    scr[:, 0] = np.arange(nspi+1)
-    scr[0, :] = np.arange(nspj+1)
+    # Sort the eigenvalues
+    s_ind = np.argsort(S)[::-1]
+    S = S[s_ind]
+    V = V[:, s_ind]
 
-    for i in np.arange(1, nspi+1):
-        for j in np.arange(1, nspj+1):
-            scr[i, j] = min([scr[i-1, j]+1, scr[i, j-1]+1,
-                             scr[i-1, j-1]+cost*np.abs(s1[i-1]-s2[j-1])])
+    # Pick eigenvalues close to zero, remove them and corresponding eigenvectors
+    # and compute the average
+    tol = np.finfo(float).eps
+    r = sum(S > tol)
+    S = S[:r]
+    V = V[:, :r]
+    nl = np.mean(S)
 
-    d = scr[nspi, nspj]
+    # Compute H0 and K0
+    Xplus = np.linalg.inv(XtX + nl*alpha*I)@Xtrain.T
+    H0 = Xtest@Xplus
+    Rtest = Xtest - H0@Xtrain
+    K0 = (Xtest - H0@Xtrain)
 
-    return d
+    # Compute pessimistic term
+    kpess = -np.linalg.norm(H0, 'fro') / H0.shape[1]
+    ksho = -np.linalg.norm(K0)/np.trace(Xtest.T@Cte@Xtest)
+    
+    adj_r2 = (r2_scores - kpess) / (1 - kpess + ksho)
+    
+    return adj_r2
 
-
-def _Dlp(A, B, p=2):
-    cost = np.sum(np.power(np.abs(A - B), p))
-    return np.power(cost, 1 / p)
-
-
-def _twed(A, timeSA, B, timeSB, nu, _lambda):
-    # [distance, DP] = TWED( A, timeSA, B, timeSB, lambda, nu )
-    # Compute Time Warp Edit Distance (TWED) for given time series A and B
-    #
-    # A      := Time series A (e.g. [ 10 2 30 4])
-    # timeSA := Time stamp of time series A (e.g. 1:4)
-    # B      := Time series B
-    # timeSB := Time stamp of time series B
-    # lambda := Penalty for deletion operation
-    # nu     := Elasticity parameter - nu >=0 needed for distance measure
-    # Reference :
-    #    Marteau, P.; F. (2009). "Time Warp Edit Distance with Stiffness Adjustment for Time Series Matching".
-    #    IEEE Transactions on Pattern Analysis and Machine Intelligence. 31 (2): 306–318. arXiv:cs/0703033
-    #    http://people.irisa.fr/Pierre-Francois.Marteau/
-
-    # Check if input arguments
-    if len(A) != len(timeSA):
-        print("The length of A is not equal length of timeSA")
-        return None, None
-
-    if len(B) != len(timeSB):
-        print("The length of B is not equal length of timeSB")
-        return None, None
-
-    if nu < 0:
-        print("nu is negative")
-        return None, None
-
-    # Add padding
-    A = np.array([0] + list(A))
-    timeSA = np.array([0] + list(timeSA))
-    B = np.array([0] + list(B))
-    timeSB = np.array([0] + list(timeSB))
-
-    n = len(A)
-    m = len(B)
-    # Dynamical programming
-    DP = np.zeros((n, m))
-
-    # Initialize DP Matrix and set first row and column to infinity
-    DP[0, :] = np.inf
-    DP[:, 0] = np.inf
-    DP[0, 0] = 0
-
-    # Compute minimal cost
-    for i in range(1, n):
-        for j in range(1, m):
-            # Calculate and save cost of various operations
-            C = np.ones((3, 1)) * np.inf
-            # Deletion in A
-            C[0] = (
-                DP[i - 1, j]
-                + _Dlp(A[i - 1], A[i])
-                + nu * (timeSA[i] - timeSA[i - 1])
-                + _lambda
-            )
-            # Deletion in B
-            C[1] = (
-                DP[i, j - 1]
-                + _Dlp(B[j - 1], B[j])
-                + nu * (timeSB[j] - timeSB[j - 1])
-                + _lambda
-            )
-            # Keep data points in both time series
-            C[2] = (
-                DP[i - 1, j - 1]
-                + _Dlp(A[i], B[j])
-                + _Dlp(A[i - 1], B[j - 1])
-                + nu * (abs(timeSA[i] - timeSB[j]) +
-                        abs(timeSA[i - 1] - timeSB[j - 1]))
-            )
-            # Choose the operation with the minimal cost and update DP Matrix
-            DP[i, j] = np.min(C)
-    distance = DP[n - 1, m - 1]
-    return distance, DP
 
 
 def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat = 1):

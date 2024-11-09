@@ -10,7 +10,7 @@ from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
 from ..viz import get_spatial_colors
 from scipy import linalg
 import mne
-from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat
+from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat
 from matplotlib import colormaps as cmaps
 
 # Memory cap (i.e. max usage).
@@ -417,7 +417,7 @@ class TRFEstimator(BaseEstimator):
 
         return pred  # Shape T x Nchan x Alpha
 
-    def score(self, Xtest, ytrue, scoring="R2"):
+    def score(self, Xtest, ytrue, Xtrain = None, scoring="R2"):
         """Compute a score of the model given true target and estimated target from Xtest.
         Parameters
         ----------
@@ -433,10 +433,13 @@ class TRFEstimator(BaseEstimator):
             Score value computed on whole segment.
         """
         yhat = self.predict(Xtest)
+        window_length = self.times.shape[0]
         if self.alpha_feat:
             reg_len = np.power(len(self.alpha), self.n_feats_)
         else:
             reg_len = len(self.alpha)
+        alpha = self.alpha
+        lags = self.lags
         if scoring == 'corr':
             scores = np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(reg_len)], axis=-1)
             self.scores = scores
@@ -447,6 +450,18 @@ class TRFEstimator(BaseEstimator):
             return scores
         elif scoring == 'R2':
             scores = np.stack([_r2_multifeat(yhat[..., a], ytrue) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        elif scoring == 'rankcorr':
+            scores = np.stack([_rankcorr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        elif scoring == 'ezekiel':
+            scores = np.stack([_ezr2_multifeat(yhat[..., a], ytrue, Xtest, window_length) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        elif scoring == 'adj_R2':
+            scores = np.stack([_adjr2_multifeat(yhat[..., a], ytrue, Xtrain, Xtest, alpha[a], lags) for a in range(reg_len)], axis=-1)
             self.scores = scores
             return scores
         else:
@@ -543,12 +558,12 @@ class TRFEstimator(BaseEstimator):
                 test_segments = test_crop.reshape(
                     int(len(test_crop) / segment_length), -1)
 
-                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :], scoring=scoring) for i in range(
+                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :], scoring=scoring, Xtrain = X[train, :]) for i in range(
                     test_segments.shape[0])]  # Evaluate each segment
 
                 scores.append(ccs)
             else:  # Evaluate using the entire testing data
-                scores[kfold, :] = self.score(X[test, :], y[test, :], scoring=scoring)
+                scores[kfold, :] = self.score(X[test, :], y[test, :], scoring=scoring, Xtrain = X[train, :])
 
         if segment_length:
             scores = np.asarray(scores)
