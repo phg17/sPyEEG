@@ -52,7 +52,7 @@ class ERP_class():
                     
         self.mERP /= len(self.events)
 
-    def add_continuous_signal(self, eeg, signal, step = None, weight_events = True):
+    def add_continuous_signal(self, eeg, signal, step = None, weight_events = False, record_weight = True):
         if step is None:
             step = len(self.window)
         self.n_chans_ = eeg.shape[1]
@@ -63,11 +63,14 @@ class ERP_class():
 
         event = 0
         while event + self.window[-1] < eeg.shape[0]:
-            if weight_events:
+            if weight_events or record_weight:
                 weight = signal[event]
             else:
                 weight = 1
-            data = weight * eeg[self.window + event, :]
+            if weight_events:
+                data = weight * eeg[self.window + event, :]
+            else:
+                data = eeg[self.window + event, :]
             self.mERP += data
             self.evoked.append(data)
             self.events.append(event)
@@ -77,7 +80,6 @@ class ERP_class():
         self.mERP /= len(self.events)
 
 
-    
 
     def plot_ERP(self, figax = None, figsize = (10,5), color_type = 'jet', center_line = True,
                     channels = None, features = None, title = 'ERP'):

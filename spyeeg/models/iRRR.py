@@ -553,7 +553,7 @@ class iRRREstimator(BaseEstimator):
             raise NotImplementedError(
                 "Only correlation, R2 & RMSE scores are valid for now...")
         
-    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=False, scoring="corr", 
+    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=False, scoring="R2", 
                   lowrank = True, segment_length=None, fit_mode='direct', verbose=True):
         '''
         Standard cross-validation. Scoring
