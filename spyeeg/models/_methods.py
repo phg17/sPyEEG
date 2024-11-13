@@ -154,8 +154,8 @@ def _adjr2_multifeat(yhat, ytrue, Xtrain, Xtest, alpha, lags, from_cov = False, 
     K0 = (Xtest - H0@Xtrain)
 
     # Compute pessimistic term
-    kpess = -np.linalg.norm(H0, 'fro') / H0.shape[1]
-    ksho = -np.linalg.norm(K0)/np.trace(Xtest.T@Cte@Xtest)
+    kpess = -np.linalg.norm(H0, 'fro')**2 / H0.shape[1]
+    ksho = -np.linalg.norm(K0, 'fro')**2/K0.shape[1]/np.trace(Xtest.T@Cte@Xtest)
     
     adj_r2 = (r2_scores - kpess) / (1 - kpess + ksho)
     

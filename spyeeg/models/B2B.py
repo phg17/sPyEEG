@@ -23,18 +23,12 @@ MEM_CAP = 0.9
 
 class B2B(BaseEstimator):
 
-    def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., alphax=[0.], alphay=[0.]):
+    def __init__(self, srate=1., alphax=[0.], alphay=[0.]):
         '''
         This class implements the back to back regression model for s/M/EEG data.
         times : mismatch a -> b, where a - dependent, b - predicted
             Negative timelags indicate a lagging behind b
             Positive timelags indicate b lagging behind a
-        tmin : float
-            Default: None
-            Minimum time lag (in seconds). Can be negative to check for lags in the past (~null model).
-        tmax : float
-            Default: None
-            Maximum time lag (in seconds). Can be large to check for lags in the future (~null model).
         srate : float
             Default: 1.
             Sampling rate of the data.
@@ -44,15 +38,8 @@ class B2B(BaseEstimator):
         alphay : list
             Default: [0.]
             Regularization parameter(s) for the source estimation model. If a list is provided, the model will be fitted for each alphay.
-
-        TODO:
-            - Implement a method to compute alpha from the data (e.g. nested cross-validation) directly in the function
-            - Give the possibility to compute alphas for each feature separately and fit them.
         
         '''
-
-        self.tmin = tmin
-        self.tmax = tmax
         self.times = times
         self.srate = srate
         self.alphax = alphax
