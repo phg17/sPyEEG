@@ -13,6 +13,7 @@ from scipy import signal
 from scipy.linalg import eigh as geigh
 from joblib import Parallel, delayed
 from sklearn.covariance import oas, ledoit_wolf, fast_mcd, empirical_covariance
+from sklearn.preprocessing import scale
 import mne
 
 # My libraries
@@ -148,3 +149,11 @@ def apply_filterbank(data, fbank, filt_func=signal.lfilter, n_jobs=-1, axis=-1):
                 data_detrend[i, :] = data[i, :]
             raw_detrend = mne.io.RawArray(data_detrend, raw.info, verbose='ERROR')
         return raw_detrend
+
+
+def scale_discrete(X):
+    n_feat = X.shape[1]
+    Xscale = np.zeros(X.shape)
+    for i_feat in range(n_feat):
+        Xscale[np.where(X[:,i_feat]>0),i_feat] = scale((X[np.where(X[:,i_feat]>0),i_feat])[0])
+    return Xscale

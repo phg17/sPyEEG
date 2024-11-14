@@ -220,3 +220,12 @@ def signal_rectify(signal, mode='half'):
         tmp = np.copy(signal)
         tmp[tmp < 0] = 0
         return tmp
+
+def permut_discrete(X):
+    X_permut = np.zeros(X.shape)
+    values = X[X != 0]
+    indices = np.where(X!=0)[0]
+    permut_values = np.random.permutation(values)
+    for i,v in zip(indices,permut_values):
+        X_permut[i] = v
+    return X_permut

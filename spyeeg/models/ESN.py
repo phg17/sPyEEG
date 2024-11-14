@@ -30,9 +30,10 @@ MEM_CAP = 0.9  # Memory cap for the iRRR model (in GB)
 class ESNEstimator(BaseEstimator):
 
     def __init__(self, srate, alpha = [0], n_units = 500, sr = 0.9, lr = 0.5, 
-                 scale_reservoir = False, percentile_units = 0, separate_features = False):
+                 scale_reservoir = False, percentile_units = 0, reservoir_mode = 'separate'):
         '''
         Echo State Network, no initialization
+        reservoir_mode : str ('separate', 'combine', 'all')
         '''
         # General parameters
         self.srate = srate
@@ -43,7 +44,7 @@ class ESNEstimator(BaseEstimator):
         self.lr = lr
         self.scale_reservoir = scale_reservoir
         self.percentile_units = percentile_units
-        self.separate_features = separate_features
+        self.reservoir_mode = reservoir_mode
         
         # All following attributes are only defined once fitted (hence the "_" suffix)
         self.intercept_ = None
@@ -56,6 +57,9 @@ class ESNEstimator(BaseEstimator):
 
         # Generate the reservoir
         self.reservoir = Reservoir(n_units, lr=lr, sr=sr)
+        self.all_reservoir = None
+        if self.reservoir_mode == 'all':
+            self.all_reservoir = Reservoir(n_units, lr=lr, sr=sr)
 
     def run_reservoir(self, X):
         '''
@@ -65,17 +69,24 @@ class ESNEstimator(BaseEstimator):
         scale_reservoir : bool, whether to scale the output of the reservoir
         separate_features : bool, whether to run a separate reservoir on each feature. Careful, this increases the total number of units.
         '''
-        if self.separate_features:
+        if self.reservoir_mode == 'separate':
             X_reservoir = np.zeros([X.shape[0], X.shape[1] * self.n_units])
             for i_feat in range(X.shape[1]):
                 X_reservoir[:,i_feat*self.n_units:(i_feat+1)*self.n_units] = self.reservoir.run(X[:,i_feat:(i_feat+1)], reset=True)
             X = X_reservoir
-        else:
+        elif self.reservoir_mode == 'combine':
             X = self.reservoir.run(X, reset=True)
+        elif self.reservoir_mode == 'all':
+            X_reservoir = np.zeros([X.shape[0], (X.shape[1]+1) * self.n_units])
+            for i_feat in range(X.shape[1]):
+                X_reservoir[:,i_feat*self.n_units:(i_feat+1)*self.n_units] = self.reservoir.run(X[:,i_feat:(i_feat+1)], reset=True)
+            X_reservoir[:,X.shape[1]*self.n_units:] = self.all_reservoir.run(X[:,:], reset=True)
+            X = X_reservoir
+        else:
+            raise Exception("reservoir_mode must be one of separate, combine or all")
+            
         if self.scale_reservoir:
             X = scale(X,axis=0)
-        if self.separate_features:
-            True
         self.reservoir_activity = X.copy()
         return X
 
@@ -147,10 +158,16 @@ class ESNEstimator(BaseEstimator):
         -------
         coef_ : ndarray (n_units x nchans x regularization params)
         '''
+        if self.reservoir_mode == 'separate':
+            n_in = self.n_units * self.n_feats_
+        elif self.reservoir_mode == 'combine':
+            n_in = self.n_units
+        elif self.reservoir_mode == 'all':
+            n_in = self.n_units * (self.n_feats_ + 1)
         if np.ndim(self.alpha) == 0:
-            betas = np.reshape(self.coef_, (self.n_units, self.n_chans_))
+            betas = np.reshape(self.coef_, (n_in, self.n_chans_))
         else:
-            betas = np.reshape(self.coef_, (self.n_units, self.n_chans_, len(self.alpha)))
+            betas = np.reshape(self.coef_, (n_in, self.n_chans_, len(self.alpha)))
         return betas
 
     def predict(self, X):
@@ -285,14 +302,10 @@ class ESNEstimator(BaseEstimator):
         if train_full:
             if verbose:
                 print("Fitting full model...")
-            # Fit using trick with adding covariance matrices -> saves RAM
-                self.fit(X, y)
+            self.fit(X, y)
         self.scores = scores
 
         return scores
-
-
-
 
     def get_best_alpha(self):
         best_alpha = np.zeros(self.n_chans_)
