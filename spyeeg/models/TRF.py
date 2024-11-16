@@ -505,9 +505,9 @@ class TRFEstimator(BaseEstimator):
         - handle different scores
         '''
 
-        if np.ndim(self.alpha) < 1 or len(self.alpha) <= 1:
-            raise ValueError(
-                "Supply several alphas to TRF constructor to use this method.")
+        #if np.ndim(self.alpha) < 1 or len(self.alpha) <= 1:
+        #    raise ValueError(
+        #        "Supply several alphas to TRF constructor to use this method.")
 
         if segment_length:
             segment_length = segment_length*self.srate  # time to samples

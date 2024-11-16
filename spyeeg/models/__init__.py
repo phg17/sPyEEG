@@ -1,1 +1,1 @@
-from . import _methods, CCA, Decoder, ERP, TRF, iRRR
+from . import _methods, CCA, Decoder, ERP, TRF, iRRR, rERP, ESN, B2B

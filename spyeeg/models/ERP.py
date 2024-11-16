@@ -1,6 +1,5 @@
 """
 ERP-style analysis.
-Fundamental Q - are we doing it better/more efficiently than MNE itself? (i.e. reinventing the wheel)
 """
 
 import os
@@ -24,7 +23,9 @@ class ERP_class():
         self.mERP = None
         self.n_chans_ = None
 
-    def add_events(self, eeg, events, event_type='spikes', weight_events = False, record_weight = True, ignore_limit = False, scale_weights = True):
+    def add_events(self, eeg, events, event_type='spikes', 
+                   weight_events = False, record_weight = True, 
+                   ignore_limit = False, scale_weights = True):
 
         self.n_chans_ = eeg.shape[1]
         self.mERP = np.zeros([len(self.window), self.n_chans_])

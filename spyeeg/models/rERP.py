@@ -1,39 +1,5 @@
 """
-Tool to do B2B regression.
-
-This script contains the code for Back-to-Back regression (b2b).
-It was originally proposed in:
-    King, J. R., Charton, F., Lopez-Paz, D., & Oquab, M. (2020). 
-    Back-to-back regression: Disentangling the influence of correlated 
-    factors from multivariate observations. NeuroImage, 220, 117028.
-
-Since the original code is not available, this script was written based on the description in the above paper,
-and on the description of its implementation in:
-    Gwilliams, L., Marantz, A., Poeppel, D., & King, J. R. (2024). 
-    Hierarchical dynamic coding coordinates speech comprehension in the brain. bioRxiv, 2024-04.
-
-When to use B2B regression?
-B2B regression allows to perform many-to-many regression. It is an improvement over multivariate decoding,
-which can only estimate the relation between multiple channels and a single feature (many-to-one). Multivariate
-decoding is limited when the features to be decoded are correlated.
-It is in these situations that B2B regression is useful, as it can disentangle the influence of multiple correlated features
-on multiple channels.
-
-How does B2B regression work?
-The principle of B2B is to first perform a regular decoding on half of the data, and then use the second half to perform another 
-regression from all true features to each estimated feature. This second regression retrieves the unique relation 
-between a true feature and its estimation, knowing all other true features.
-Thus, B2B outputs the diagonal of a causal influence matrix, which represents the influence of each feature on all channels. 
-The values obtained are beta coefficients. If beta values for a given feature is above 0, it is encoded in the neural signal. 
-Note that B2B does not assess significance.
-
-I still don't understand the output of B2B. Can you tell me more ?
-In the theorical case where there is no noise in the data, the diagonal of the causal influence matrix S would be a binary matrix.
-If a feature i has some influence on the neural data, Sii = 1. If not, Sii = 0. In practice, the noise in the data will make
-the estimation fluctuate. The use of Ridge regression allows to reduce the influence of noise, but will produce smaller values in S.
-Thus, a practical work-around is to replicate the analysis on multiple subject, and to test whether Sii is significantly above 0.
-Note that the values in S are relative to the effect size and to the SNR. 
-These values are beta coefficients, and should not be interpreted as explained variance. 
+Tool to do ERP regression.
 """
 
 import os
@@ -45,17 +11,13 @@ from matplotlib import colormaps as cmaps
 from sklearn.preprocessing import scale
 from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat
 from sklearn.model_selection import KFold
-from sklearn.linear_model import RidgeCV, LinearRegression
-from sklearn.model_selection import train_test_split
-from joblib import Parallel, delayed
 
-class B2BEstimator():
-    def __init__(self, tmin, tmax, srate, alphax = np.logspace(-5, 5, 20), alphay = np.logspace(-5, 5, 20)):
+class ERPEstimator():
+    def __init__(self, tmin, tmax, srate, alpha = [0.]):
         self.srate = srate
         self.tmin = tmin
         self.tmax = tmax
-        self.alphax = alphax
-        self.alphay = alphay
+        self.alpha = alpha
         self.window = lag_span(tmin, tmax, srate)
         self.times = self.window/srate
         self.epochs_duration = len(self.window)
@@ -195,50 +157,159 @@ class B2BEstimator():
             for i_chan in range(self.n_chans_):
                 y[:,:,i_chan] = scale(y[:,:,i_chan])
 
+        y = np.reshape(y, (self.n_epochs_, self.epochs_duration*self.n_chans_))
+
         return X, y
+        
 
-    def b2b_(self,t,X1,X2,Y1,Y2):
-        y1 = Y1[:,t,:]
-        y2 = Y2[:,t,:]
+    def fit(self, X, y,
+            events = None, ref_index = 0, events_type = 'single', 
+            epoched=False, drop_overlap=True,
+            scalex = False, scaley = False):
+        """Fit the ERP regression model.
+        Parameters
+        ----------
+        X : ndarray (T x nfeat) or ndarray (nepochs x nfeat)
+        y : ndarray (T x nchan) or ndarray (nepochs x epochs_window x nchan))
+        events : ndarray (n_epochs) 
+            array of center of epochs 
+        ref_index : int
+            if events is None, take the regressor at position ref_index as the center of events
+        events_type : str ('single', 'mean', 'max')
+                whether to use the value of features aligned with the events (single), 
+                the (mean/max) over the time window,
+        epoched : bool
+            Default: False.
+            Whether X and y are epoched
+        scalex : bool
+            Whether to scale the features
+        scaley : bool
+            Whether to scale the eeg data
+        drop_overlap : bool
+            Default: True.
+            Whether to drop non valid samples
+        Returns
+        -------
+        coef_ : ndarray (alphas x nlags x nfeats)
+        intercept_ : ndarray (nfeats x 1)
+        """
 
-        #predict each feature Xi from all channels Y (i.e. decoding)
-        reg1 = RidgeCV(alphas=self.alphay, fit_intercept=False, cv = None, scoring = 'neg_mean_squared_error') 
-        reg1.fit(y1, X1)
-        G = reg1.coef_.T
+        # Preprocess and lag inputs
+        if not epoched:
+            X, y = self.get_XY(X, y, 
+                   events = events, ref_index = ref_index, events_type = events_type,
+                   epoched=epoched, drop_overlap=drop_overlap, scalex = scalex, scaley = scaley)
 
-        # reg2 = LinearRegression(fit_intercept=False) #King et al., 2020
-        reg2 = RidgeCV(alphas=self.alphax, fit_intercept=False, cv = None, scoring = 'neg_mean_squared_error') #Gwilliams et al., 2024
-        reg2.fit(X2, np.dot(y2, G))
-        H = reg2.coef_.T
+        # Regress with Ridge to obtain coef for the input alpha
+        self.coef_ = _ridge_fit_SVD(X, y, self.alpha, n_feat=self.n_feats_)
 
-        #return causal influence matrix
-        return H.diagonal()
+        self.fitted = True
 
-    def xval_eval(self, X, y, n_folds=100, 
-                  events = None, ref_index = 0, 
-                  events_type = 'single',epoched=False, drop_overlap=True,
+        return self
+
+    def get_coef(self):
+        '''
+        Format and return coefficients.
+
+        Returns
+        -------
+        coef_ : ndarray (nlags x nfeats x nchans x regularization params)
+        '''
+        if np.ndim(self.alpha) == 0:
+            betas = np.reshape(self.coef_, (self.n_feats_, self.epochs_duration ,self.n_chans_))
+        else:
+            betas = np.reshape(self.coef_, (self.n_feats_, self.epochs_duration,self.n_chans_, len(self.alpha)))
+        return betas
+
+    def predict(self, X):
+        """Compute output based on fitted coefficients and feature matrix X.
+        Parameters
+        ----------
+        X : ndarray
+            Matrix of features.
+        Returns
+        -------
+        ndarray
+            Reconstruction of target with current beta estimates
+        Notes
+        -----
+        If the matrix onky has features in its column (not yet lagged), the lagged version
+        of the feature matrix will be created on the fly (this might take some time if the matrix
+        is large).
+        """
+        assert self.fitted, "Fit model first!"
+
+        betas = self.coef_[:]
+        pred = np.stack([X.dot(betas[..., i])
+                         for i in range(betas.shape[-1])], axis=-1)
+        if np.ndim(self.alpha) == 0:
+            pred = np.reshape(pred, (X.shape[0], self.epochs_duration,self.n_chans_))
+        else:
+            pred = np.reshape(pred, (X.shape[0], self.epochs_duration,self.n_chans_, len(self.alpha)))
+
+        return pred  # Shape Nepochs x Tepochs x Nchan x Nalpha
+
+    def score(self, Xtest, ytrue, Xtrain = None, scoring= "R2"):
+        """Compute a score of the model given true target and estimated target from Xtest.
+        Parameters
+        ----------
+        Xtest : ndarray
+            Array used to get "yhat" estimate from model
+        ytrue : ndarray
+            True target
+        scoring : str (or func in future?)
+            Scoring function to be used ("rmse", "R2")
+        Returns
+        -------
+        float
+            Score value computed on whole segment.
+        """
+        yhat = self.predict(Xtest)
+        ytrue = ytrue.reshape((ytrue.shape[0],self.epochs_duration, self.n_chans_))
+        reg_len = len(self.alpha)
+        alpha = self.alpha
+        if scoring == 'rmse':
+            scores = np.stack([_rmse_multifeat(yhat[..., a], ytrue) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        elif scoring == 'R2':
+            scores = np.stack([_r2_multifeat(yhat[..., a], ytrue) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        else:
+            raise NotImplementedError(
+                "Only R2 & RMSE scores are valid for now...")
+
+    def xval_eval(self, X, y, n_splits=5, 
+                  events = None, ref_index = 0, events_type = 'single',epoched=False, 
+                  drop_overlap=True, train_full=True, 
                   scalex = False, scaley = False,
-                  verbose=True, n_print = 10,
-                  n_jobs = -1):
+                  scoring="R2", verbose=True):
         '''
         to be filled
         '''
-        
         if not epoched:
             X,y = self.get_XY(X,y, 
                events = events, ref_index = ref_index, events_type = events_type,
                epoched=False, drop_overlap=drop_overlap, scalex = scalex, scaley = scaley)
-            
-        S = np.zeros((n_folds, self.epochs_duration, self.n_feats_))
-        for i_fold in range(n_folds):
-            np.random.seed(i_fold)
-            X1, X2, Y1, Y2 = train_test_split(X, y, test_size=0.5)
-            if verbose and i_fold % 10 == 0:
-                print('Computing fold', i_fold+1, '/', n_folds)
-            s = Parallel(n_jobs=n_jobs)(delayed(self.b2b_)(t,X1,X2,Y1,Y2) for t in range(self.epochs_duration))
-            for t in range(self.epochs_duration):
-                S[i_fold, t,:] = s[t]
+        reg_len = len(self.alpha)
+        
+        kf = KFold(n_splits=n_splits)
+        scores = np.zeros((n_splits, self.epochs_duration ,self.n_chans_, reg_len))
+        for kfold, (train, test) in enumerate(kf.split(X)):
+            if verbose:
+                print("Training/Evaluating fold %d/%d" % (kfold+1, n_splits))
+                self.fit(X[train, :], y[train, :], epoched = True)
+                scores[kfold, :] = self.score(X[test, :], y[test, :], scoring=scoring, Xtrain = X[train, :])
 
-        return S
+        if train_full:
+            if verbose:
+                print("Fitting full model...")
+                self.fit(X, y, epoched = True)
+        self.scores = scores
+
+        return scores
+
+
 
 
