@@ -43,7 +43,7 @@ from ..utils import lag_span, lag_sparse, get_timing
 import mne
 from matplotlib import colormaps as cmaps
 from sklearn.preprocessing import scale
-from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat
+from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat, _b2b
 from sklearn.model_selection import KFold
 from sklearn.linear_model import RidgeCV, LinearRegression
 from sklearn.model_selection import train_test_split
@@ -197,23 +197,6 @@ class B2BEstimator():
 
         return X, y
 
-    def b2b_(self,t,X1,X2,Y1,Y2):
-        y1 = Y1[:,t,:]
-        y2 = Y2[:,t,:]
-
-        #predict each feature Xi from all channels Y (i.e. decoding)
-        reg1 = RidgeCV(alphas=self.alphay, fit_intercept=False, cv = None, scoring = 'neg_mean_squared_error') 
-        reg1.fit(y1, X1)
-        G = reg1.coef_.T
-
-        # reg2 = LinearRegression(fit_intercept=False) #King et al., 2020
-        reg2 = RidgeCV(alphas=self.alphax, fit_intercept=False, cv = None, scoring = 'neg_mean_squared_error') #Gwilliams et al., 2024
-        reg2.fit(X2, np.dot(y2, G))
-        H = reg2.coef_.T
-
-        #return causal influence matrix
-        return H.diagonal()
-
     def xval_eval(self, X, y, n_folds=100, 
                   events = None, ref_index = 0, 
                   events_type = 'single',epoched=False, drop_overlap=True,
@@ -235,7 +218,7 @@ class B2BEstimator():
             X1, X2, Y1, Y2 = train_test_split(X, y, test_size=0.5)
             if verbose and i_fold % 10 == 0:
                 print('Computing fold', i_fold+1, '/', n_folds)
-            s = Parallel(n_jobs=n_jobs)(delayed(self.b2b_)(t,X1,X2,Y1,Y2) for t in range(self.epochs_duration))
+            s = Parallel(n_jobs=n_jobs)(delayed(_b2b)(t,X1,X2,Y1,Y2, self.alphax, self.alphay) for t in range(self.epochs_duration))
             for t in range(self.epochs_duration):
                 S[i_fold, t,:] = s[t]
 

@@ -37,11 +37,18 @@ def simulate_continuous_stimuli(fs, time_array, mode = 'AR', phi = 1.1, noise_st
 def simulate_channels(n_feat = 2, n_channels = 3, 
                       fs = 100, T = 60, 
                       noise_level = 0, beta_noise = 0,
-                      stim_type = 'discrete', n_pulse = 120, 
+                      stim_type = 'discrete', n_pulse = 120, share_events = True, weights_feat = [],
                       compression_factor = 1, 
                       impulse_freqs = [0.1,10], decreasing_rates = [0.1,20], delays = [0.06,0.2],
                       random_seed = 0, scale_data = True):
     np.random.seed(random_seed)
+    if len(weights_feat) == 0:
+        weights_feat = np.ones(n_feat)/n_feat
+    elif len(weights_feat) == n_feat:
+        weights_feat = np.asarray(weights_feat)/np.sum(weights_feat)
+    else:
+        weights_feat = np.ones(n_feat)/n_feat
+        print("Weights have incoherent shape relative to number of features, set to equal weights")
     n_samples = int(T*fs)
     time_array = np.linspace(0,T,n_samples)
     impulse_responses = np.zeros([n_feat, n_channels,n_samples])
@@ -49,8 +56,13 @@ def simulate_channels(n_feat = 2, n_channels = 3,
     nonlinear_events = np.zeros([n_feat,n_samples])
     response = np.zeros([n_channels,n_samples])
     if stim_type == 'discrete':
-        for i_feat in range(n_feat):
-            events[i_feat,np.random.randint(0,n_samples,n_pulse)] = np.random.random(n_pulse)
+        if share_events:
+            event_pulses = np.random.randint(0,n_samples,n_pulse)
+            for i_feat in range(n_feat):
+                events[i_feat,event_pulses] = np.random.random(n_pulse)
+        else:
+            for i_feat in range(n_feat):
+                events[i_feat,np.random.randint(0,n_samples,n_pulse)] = np.random.random(n_pulse)
     elif stim_type == 'continuous':
         for i_feat in range(n_feat):
             signal1 = np.random.randint(1,100) * np.sin(2*np.pi*np.random.randint(1,100)*time_array/fs)*np.cos(2*np.pi*np.random.randint(1,100)*time_array/fs)**2
@@ -61,7 +73,7 @@ def simulate_channels(n_feat = 2, n_channels = 3,
 
     for i_feat in range(n_feat):
         for i_channel in range(n_channels):
-            impulse_responses[i_feat, i_channel,:] = np.roll(np.sin(2*np.pi*np.random.randint(impulse_freqs[0],impulse_freqs[1])*time_array + np.random.rand()*2*np.pi) * np.exp(-time_array*np.random.randint(decreasing_rates[0],decreasing_rates[1])), np.random.randint(int(delays[0]*fs),int(delays[1]*fs)))
+            impulse_responses[i_feat, i_channel,:] = scale(np.roll(np.sin(2*np.pi*np.random.randint(impulse_freqs[0],impulse_freqs[1])*time_array + np.random.rand()*2*np.pi) * np.exp(-time_array*np.random.randint(decreasing_rates[0],decreasing_rates[1])), np.random.randint(int(delays[0]*fs),int(delays[1]*fs)))) / n_samples
                         
     X = events.T
     if scale_data:
@@ -69,12 +81,11 @@ def simulate_channels(n_feat = 2, n_channels = 3,
             X = scale(X,axis = 0)
         else:
             X = scale_discrete(X)
-
-    for i_feat in range(n_feat):
-        for i_channel in range(n_channels):
+    for i_channel in range(n_channels):
+        for i_feat in range(n_feat):
             noise = cn.powerlaw_psd_gaussian(beta_noise, n_samples) * noise_level
             nonlinear_events[i_feat,:] = np.power(np.abs(events[i_feat,:]), compression_factor) * np.sign(events[i_feat,:])
-            response[i_channel] += convolve(nonlinear_events[i_feat,:], impulse_responses[i_feat, i_channel,:])[:n_samples] + noise
+            response[i_channel] += weights_feat[i_feat]*convolve(nonlinear_events[i_feat,:], impulse_responses[i_feat, i_channel,:])[:n_samples] + noise
     
     Y = response.T
     if scale_data:

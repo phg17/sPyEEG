@@ -5,6 +5,7 @@ Common helper functions for modelling.
 import os
 import numpy as np
 from sklearn.model_selection import KFold
+from sklearn.linear_model import RidgeCV, LinearRegression
 import matplotlib.pyplot as plt
 from mne.decoding import BaseEstimator
 from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
@@ -246,6 +247,25 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat 
             coeff.append(np.dot(V, (z/(S + nl*l)[:, np.newaxis])))
     
     return np.stack(coeff, axis=-1)
+
+
+
+def _b2b(t,X1,X2,Y1,Y2, alphax, alphay):
+    y1 = Y1[:,t,:]
+    y2 = Y2[:,t,:]
+
+    #predict each feature Xi from all channels Y (i.e. decoding)
+    reg1 = RidgeCV(alphas=alphay, fit_intercept=False, cv = None, scoring = 'neg_mean_squared_error') 
+    reg1.fit(y1, X1)
+    G = reg1.coef_.T
+
+    # reg2 = LinearRegression(fit_intercept=False) #King et al., 2020
+    reg2 = RidgeCV(alphas=alphax, fit_intercept=False, cv = None, scoring = 'neg_mean_squared_error') #Gwilliams et al., 2024
+    reg2.fit(X2, np.dot(y2, G))
+    H = reg2.coef_.T
+
+    #return causal influence matrix
+    return H.diagonal()
 
 
 def _objective_value(y,X,mu,B,lambdas0,lambda1):
