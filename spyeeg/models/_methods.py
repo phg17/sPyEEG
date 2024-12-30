@@ -15,6 +15,8 @@ from scipy.stats import spearmanr
 import mne
 import itertools
 from time import time as chrono
+from scipy.linalg import sqrtm
+from scipy.stats import pearsonr
 
 
 def _get_covmat(x, y):
@@ -162,6 +164,22 @@ def _adjr2_multifeat(yhat, ytrue, Xtrain, Xtest, alpha, lags, from_cov = False, 
     
     return adj_r2
 
+def _pairwise_corr(X, Y):
+
+    '''
+    Function for computing the pairwise correlations between the columns of two matrices X and Y
+
+    Parameters
+    ----------
+    X: numpy array of shape (n_samples, n_features)
+    Y: numpy array of shape (n_samples, n_features)
+
+    Returns
+    -------
+    correlations: numpy array of shape (n_features,)
+    '''
+    
+    return np.array([pearsonr(X.real[:, i], Y.real[:, i])[0] for i in range(X.shape[1])])
 
 
 def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat = 1):
@@ -248,8 +266,6 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat 
     
     return np.stack(coeff, axis=-1)
 
-
-
 def _b2b(t,X1,X2,Y1,Y2, alphax, alphay):
     y1 = Y1[:,t,:]
     y2 = Y2[:,t,:]
@@ -295,3 +311,86 @@ def _soft_threshold(d,lam):
     np.fmin(d+lam,0,where=d<0,out=dout)
 
     return dout
+
+def _covariance_fourier(x, start_lag, end_lag):
+    """
+    Compute the covariance matrix for lagged multi-channel data using the Fourier method.
+
+    Parameters
+    ----------
+    x : numpy array of shape (n_samples, n_channels)
+        Input time series data with multiple channels.
+    start_lag : int
+        Start of the lag range.
+    end_lag : int
+        End of the lag range.
+
+    Returns
+    -------
+    cov_X : numpy array of shape (n_channels * n_lags, n_channels * n_lags)
+        Covariance matrix for the lagged data across all channels.
+    """
+    n_samples, n_channels = x.shape
+    lags = np.arange(start_lag, end_lag)
+    n_lags = len(lags)
+
+    # Initialize the covariance matrix
+    cov_X = np.zeros((n_channels * n_lags, n_channels * n_lags))
+
+    # Compute FFT for each channel
+    fft_x = [np.fft.fft(x[:, i], n=2 * n_samples) for i in range(n_channels)]
+    power_spectra = [np.abs(fft) ** 2 for fft in fft_x]
+
+    # Compute cross-power spectra for all pairs of channels
+    cross_power_spectra = {
+        (i, j): fft_x[i] * np.conj(fft_x[j])
+        for i in range(n_channels) for j in range(i, n_channels)
+    }
+
+    # Compute autocorrelation and cross-correlation via inverse FFT
+    autocorrs = [
+        np.fft.ifft(power_spectra[i]).real[:n_samples] for i in range(n_channels)
+    ]
+    crosscorrs = {
+        (i, j): np.fft.ifft(cross_power_spectra[(i, j)]).real[:n_samples]
+        for i in range(n_channels) for j in range(i, n_channels)
+    }
+
+    # Fill the covariance matrix
+    for i, lag1 in enumerate(lags):
+        for j, lag2 in enumerate(lags):
+            lag_diff = abs(lag1 - lag2)
+
+            for c1 in range(n_channels):
+                for c2 in range(n_channels):
+                    block_i = c1 * n_lags + i
+                    block_j = c2 * n_lags + j
+
+                    if c1 == c2:  # Autocorrelation
+                        cov_X[block_i, block_j] = (
+                            autocorrs[c1][lag_diff] if lag_diff < n_samples else 0
+                        )
+                    elif c1 < c2:  # Cross-correlation (upper triangle)
+                        cov_X[block_i, block_j] = (
+                            crosscorrs[(c1, c2)][lag_diff] if lag_diff < n_samples else 0
+                        )
+                    else:  # Cross-correlation (lower triangle)
+                        cov_X[block_i, block_j] = (
+                            crosscorrs[(c2, c1)][lag_diff] if lag_diff < n_samples else 0
+                        )
+
+    return cov_X
+
+def _inverse_square_root(m):
+
+    '''
+    Function for computing the inverse square-root of a function. Multiple methods are available, but for a quick implementation
+    here I just use the scipy.linalg.sqrtm function.
+
+    Parameters
+    ----------
+    m: numpy array of shape (n_features, n_features)
+    '''
+
+    return np.linalg.inv(sqrtm(m))
+

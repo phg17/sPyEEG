@@ -30,7 +30,8 @@ MEM_CAP = 0.9  # Memory cap for the iRRR model (in GB)
 class ESNEstimator(BaseEstimator):
 
     def __init__(self, srate, alpha = [0], n_units = 500, sr = 0.9, lr = 0.5, 
-                 scale_reservoir = False, percentile_units = 0, reservoir_mode = 'separate'):
+                 scale_reservoir = False, percentile_units = 0, reservoir_mode = 'separate',
+                 feedback = False):
         '''
         Echo State Network, no initialization
         reservoir_mode : str ('separate', 'combine', 'all')

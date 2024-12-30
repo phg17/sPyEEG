@@ -12,6 +12,7 @@ from scipy.signal import convolve
 from sklearn.preprocessing import MinMaxScaler, scale
 import colorednoise as cn
 from .preproc import scale_discrete
+from mne.filter import filter_data
 
 
 def simulate_continuous_stimuli(fs, time_array, mode = 'AR', phi = 1.1, noise_std = 0.9):
@@ -37,9 +38,11 @@ def simulate_continuous_stimuli(fs, time_array, mode = 'AR', phi = 1.1, noise_st
 def simulate_channels(n_feat = 2, n_channels = 3, 
                       fs = 100, T = 60, 
                       noise_level = 0, beta_noise = 0,
-                      stim_type = 'discrete', n_pulse = 120, share_events = True, weights_feat = [],
+                      stim_type = 'discrete', n_pulse = 120, share_events = True, 
+                      weights_feat = [], weights_channel = [],
                       compression_factor = 1, 
-                      impulse_freqs = [0.1,10], decreasing_rates = [0.1,20], delays = [0.06,0.2],
+                      impulse_freqs = [0.1,10], decreasing_rates = [0.1,20], delays = [0.06,0.2], filter_impulse = False,
+                      share_impulse = False,
                       random_seed = 0, scale_data = True):
     np.random.seed(random_seed)
     if len(weights_feat) == 0:
@@ -48,6 +51,13 @@ def simulate_channels(n_feat = 2, n_channels = 3,
         weights_feat = np.asarray(weights_feat)/np.sum(weights_feat)
     else:
         weights_feat = np.ones(n_feat)/n_feat
+        print("Weights have incoherent shape relative to number of features, set to equal weights")
+    if len(weights_channel) == 0:
+        weights_channel = np.ones(n_channels)
+    elif len(weights_feat) == n_feat:
+        weights_feat = np.asarray(weights_channels)
+    else:
+        weights_feat = np.ones(n_channels)
         print("Weights have incoherent shape relative to number of features, set to equal weights")
     n_samples = int(T*fs)
     time_array = np.linspace(0,T,n_samples)
@@ -65,15 +75,16 @@ def simulate_channels(n_feat = 2, n_channels = 3,
                 events[i_feat,np.random.randint(0,n_samples,n_pulse)] = np.random.random(n_pulse)
     elif stim_type == 'continuous':
         for i_feat in range(n_feat):
-            signal1 = np.random.randint(1,100) * np.sin(2*np.pi*np.random.randint(1,100)*time_array/fs)*np.cos(2*np.pi*np.random.randint(1,100)*time_array/fs)**2
-            signal2 = np.random.randint(1,100) * np.sin(2*np.pi*np.random.randint(1,100)*time_array/fs)*np.cos(2*np.pi*np.random.randint(1,100)*time_array/fs)**2
-            y = convolve(signal1, signal2, 'same')
             y = simulate_continuous_stimuli(fs, time_array)
             events[i_feat,:] = MinMaxScaler(feature_range=(-1,1)).fit_transform(y.reshape(-1, 1)).reshape(-1)
 
     for i_feat in range(n_feat):
         for i_channel in range(n_channels):
-            impulse_responses[i_feat, i_channel,:] = scale(np.roll(np.sin(2*np.pi*np.random.randint(impulse_freqs[0],impulse_freqs[1])*time_array + np.random.rand()*2*np.pi) * np.exp(-time_array*np.random.randint(decreasing_rates[0],decreasing_rates[1])), np.random.randint(int(delays[0]*fs),int(delays[1]*fs)))) / n_samples
+            impulse_responses[i_feat, i_channel,:] = weights_channel[i_channel]*scale(np.roll(np.sin(2*np.pi*np.random.randint(impulse_freqs[0],impulse_freqs[1])*time_array + np.random.rand()*2*np.pi) * np.exp(-time_array*np.random.randint(decreasing_rates[0],decreasing_rates[1])), np.random.randint(int(delays[0]*fs),int(delays[1]*fs)))) / n_samples
+            if filter_impulse:
+                impulse_responses[i_feat, i_channel,:] = filter_data(impulse_responses[i_feat, i_channel,:],fs,0.01,fs//3, verbose = False)
+            if share_impulse:
+                impulse_responses[i_feat, i_channel,:] = weights_channel[i_channel]*impulse_responses[i_feat, 0,:]
                         
     X = events.T
     if scale_data:
