@@ -10,7 +10,7 @@ from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
 from ..viz import get_spatial_colors
 from scipy import linalg
 import mne
-from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat
+from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat, _fourier_fit
 from matplotlib import colormaps as cmaps
 
 # Memory cap (i.e. max usage).
@@ -20,7 +20,8 @@ MEM_CAP = 0.9
 
 class TRFEstimator(BaseEstimator):
 
-    def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., alpha=[0.], fit_intercept=False, mtype='forward', alpha_feat = False):
+    def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., alpha=[0.], 
+                 fit_intercept=False, mtype='forward', alpha_feat = False, fit_domain = 'time'):
         '''
         This class implements the TRF model for s/M/EEG data.
         times : mismatch a -> b, where a - dependent, b - predicted
@@ -69,6 +70,7 @@ class TRFEstimator(BaseEstimator):
         self.fit_intercept = fit_intercept
         self.fitted = False
         self.lags = None
+        self.fit_domain = fit_domain
 
         # All following attributes are only defined once fitted (hence the "_" suffix)
         self.intercept_ = None
@@ -192,22 +194,16 @@ class TRFEstimator(BaseEstimator):
         intercept_ : ndarray (nfeats x 1)
         """
 
-        # Preprocess and lag inputs
-        X, y = self.get_XY(X, y, lagged, drop, feat_names)
-
-
-        # Adding intercept feature:
-        if self.fit_intercept:
-            X = np.hstack([np.ones((len(X), 1)), X])
-
-        # Regress with Ridge to obtain coef for the input alpha
-        self.coef_ = _ridge_fit_SVD(X, y, self.alpha, alpha_feat = self.alpha_feat, n_feat=self.n_feats_)
-
-        # Reshaping and getting coefficients
-        if self.fit_intercept:
-            self.intercept_ = self.coef_[0, np.newaxis, :]
-            self.coef_ = self.coef_[1:, :]
-
+        if self.fit_domain == 'time':
+            # Preprocess and lag inputs
+            X, y = self.get_XY(X, y, lagged, drop, feat_names)
+    
+            # Regress with Ridge to obtain coef for the input alpha
+            self.coef_ = _ridge_fit_SVD(X, y, self.alpha, alpha_feat = self.alpha_feat, n_feat=self.n_feats_)
+            
+        elif self.fit_domain == 'frequency':
+            # Compute TRF in the Frequency Domain
+            self.coef_ = _fourier_fit(X, y, self.alpha, self.lags)
         self.fitted = True
 
         return self

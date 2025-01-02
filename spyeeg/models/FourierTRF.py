@@ -4,345 +4,11 @@ from scipy.stats import pearsonr
 from scipy.fft import fft, ifft
 from scipy.signal import fftconvolve, welch
 from scipy.signal import csd as welch_csd
+from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat, resample_array
 
-
-def resample_array(array, new_length):
-    """
-    Resamples an array to a fixed number of points using average pooling.
-
-    Parameters:
-        array (np.ndarray): The input array to resample. Can be 1D or multi-channel (e.g., 2D for multi-channel).
-        new_length (int): The desired length of the output array.
-
-    Returns:
-        np.ndarray: The resampled array.
-    """
-    if new_length <= 0:
-        raise ValueError("new_length must be greater than 0.")
-
-    # Handle multi-channel arrays
-    if array.ndim == 1:
-        array = array[:, np.newaxis]
-
-    # Original array length
-    old_length = array.shape[0]
-
-    if old_length == new_length:
-        return array.copy() if array.ndim == 1 else array.copy().squeeze()
-
-    # Compute the resampling ratio
-    ratio = old_length / new_length
-
-    # Create new indices
-    new_indices = np.linspace(0, old_length, new_length, endpoint=False)
-
-    # Initialize the resampled array
-    resampled = np.zeros((new_length, *[array.shape[i] for i in range(1, len(array.shape))]), dtype=array.dtype)
-
-    # Average pooling for the segments
-    for i in range(new_length):
-        # Determine the range of indices in the original array that contribute to this output index
-        start_idx = int(np.floor(i * ratio))
-        end_idx = int(np.ceil((i + 1) * ratio))
-
-        # If the range is within bounds, compute the mean
-        if end_idx > start_idx:
-            resampled[i] = np.mean(array[start_idx:end_idx], axis=0)
-        else:
-            # Interpolate for fractional indices
-            lower_idx = min(start_idx, old_length - 1)
-            upper_idx = min(end_idx, old_length - 1)
-            weight = (i * ratio - lower_idx)
-            resampled[i] = (1 - weight) * array[lower_idx] + weight * array[upper_idx]
-
-    return resampled
 
 
 class FourierTRFEstimator:
-    """
-    Estimate the Impulse Response Function (IRF) of a system.
-
-    Supports both time-domain and frequency-domain estimation, with options for
-    regularization and negative lags.
-
-    Attributes:
-    ----------
-    min_lag : int
-        Minimum lag to consider (negative for future input).
-    max_lag : int
-        Maximum lag to consider (positive for past input).
-    method : str
-        Estimation method ('time' or 'frequency').
-    regularization : str or None
-        Regularization type ('ridge' or None).
-    alpha : float
-        Regularization strength (used if regularization is 'ridge').
-    irf : ndarray or None
-        Estimated impulse response function (set after calling `fit`).
-
-    Methods:
-    -------
-    fit(x, y):
-        Estimate the impulse response function using input-output data.
-    predict(x):
-        Predict the output signal using the estimated impulse response.
-    score(x, y):
-        Compute the coefficient of determination (R^2 score) for each output.
-    """
-
-    def __init__(self, min_lag, max_lag, method='time', regularization=None, alpha=0.1, eps=1e-6, frequency_smoothing_method='boxcar'):
-        """
-        Initialize the ImpulseResponseEstimator.
-
-        Parameters:
-        ----------
-        min_lag : int
-            Minimum lag (negative for future input).
-        max_lag : int
-            Maximum lag (positive for past input).
-        method : str, optional
-            Estimation method ('time' or 'frequency'), default is 'time'.
-        regularization : str or None, optional
-            Regularization type ('ridge' or None), default is None.
-        alpha : float, optional
-            Regularization strength, used if regularization is 'ridge'.
-        frequency_smoothing: str
-            The frequency-domain smoothing method ('none', 'boxcar', 'welch', 'resample')
-        """
-        self.min_lag = min_lag
-        self.max_lag = max_lag
-        self.method = method
-        self.regularization = regularization
-        self.alpha = alpha
-        self.irf = None
-        self.eps = eps
-        self.smoothing_method = frequency_smoothing_method
-
-    def fit(self, x, y):
-        """
-        Fit the impulse response function using input-output data.
-
-        Parameters:
-        ----------
-        x : ndarray of shape (n_samples,)
-            Input signal.
-        y : ndarray of shape (n_samples, n_outputs)
-            Output signal, where each column corresponds to an output feature.
-
-        Returns:
-        -------
-        irf : ndarray of shape (max_lag - min_lag + 1, n_outputs)
-            Estimated impulse response function.
-        """
-        y = np.atleast_2d(y)  # Ensure y is 2D
-        if self.method == 'time':
-            self.irf = self._fit_time_domain(x, y)
-        elif self.method == 'frequency':
-            self.irf = self._fit_frequency_domain(x, y)
-        else:
-            raise ValueError("Invalid method. Choose 'time' or 'frequency'.")
-        return self.irf
-
-    def predict(self, x):
-        """
-        Predict the output signal using the estimated impulse response.
-
-        Parameters:
-        ----------
-        x : ndarray of shape (n_samples,)
-            Input signal.
-
-        Returns:
-        -------
-        y_pred : ndarray of shape (n_samples, n_outputs)
-            Predicted output signal.
-        """
-        if self.irf is None:
-            raise ValueError("Model not fitted yet. Call fit() before predict().")
-
-        # Convolve the input signal with the impulse response for each output
-        n_outputs = self.irf.shape[1]
-        lags = np.arange(self.min_lag, self.max_lag + 1)
-        y_pred = np.zeros((len(x), n_outputs))
-
-        for i in range(n_outputs):
-            y_pred[:, i] = np.sum(
-                [np.roll(x, -lag) * self.irf[lag - self.min_lag, i] for lag in lags], axis=0
-            )
-        return y_pred
-
-    def score(self, x, y):
-        """
-        Compute the coefficient of determination (R^2 score) for each output.
-
-        Parameters:
-        ----------
-        x : ndarray of shape (n_samples,)
-            Input signal.
-        y : ndarray of shape (n_samples, n_outputs)
-            Output signal.
-
-        Returns:
-        -------
-        r2 : ndarray of shape (n_outputs,)
-            R^2 scores for each output.
-        """
-        y = np.atleast_2d(y)
-        y_pred = self.predict(x)
-
-        n_outputs = y.shape[1]
-        rs = np.zeros(n_outputs)
-        for i in range(n_outputs):
-            rs[i] = pearsonr(y[:, i], y_pred[:, i])[0]
-        return np.mean(rs)
-
-    def _fit_time_domain(self, x, y):
-        """
-        Estimate the IRF in the time domain using lagged matrix regression.
-
-        Parameters:
-        ----------
-        x : ndarray of shape (n_samples,)
-            Input signal.
-        y : ndarray of shape (n_samples, n_outputs)
-            Output signal.
-
-        Returns:
-        -------
-        irf : ndarray of shape (max_lag - min_lag + 1, n_outputs)
-            Estimated impulse response function.
-        """
-        n_samples, n_outputs = y.shape
-
-        # Construct lagged input matrix
-        X = self._construct_lagged_matrix(x)
-        autocov = X.T @ X
-        
-        irf = np.zeros((self.max_lag - self.min_lag + 1, n_outputs))
-        for i in range(n_outputs):
-            if self.regularization == 'ridge':
-                # Ridge regression
-                reg_matrix = self.alpha * np.eye(X.shape[1]) * np.mean(np.diag(autocov))
-                irf[:, i] = np.linalg.inv(autocov + reg_matrix) @ X.T @ y[:, i]
-            else:
-                # Ordinary least squares
-                irf[:, i] = np.linalg.inv(autocov) @ X.T @ y[:, i]
-        return irf
-
-    
-    def _fit_frequency_domain(self, x, y):
-        """
-        Estimate the IRF in the frequency domain using FFT.
-
-        Parameters:
-        ----------
-        x : ndarray of shape (n_samples,)
-            Input signal.
-        y : ndarray of shape (n_samples, n_outputs)
-            Output signal.
-
-        Returns:
-        -------
-        irf : ndarray of shape (max_lag - min_lag + 1, n_outputs)
-            Estimated impulse response function.
-        """
-        n_samples, n_outputs = y.shape
-
-        # ChatGPT insists on this padding stuff
-        # Zero-pad signals to handle negative and positive lags
-        total_lags = self.max_lag - self.min_lag + 1
-        x_padded = np.pad(x, (0, total_lags), mode='constant')
-        y_padded = np.pad(y, ((0, total_lags), (0, 0)), mode='constant')
-
-        if self.smoothing_method == 'none':
-            X_fft = fft(x_padded)
-            Y_fft = fft(y_padded, axis=0)
-    
-            psd = np.abs(X_fft) ** 2
-            csd = Y_fft * np.conj(X_fft)[:, None]
-
-        if self.smoothing_method == 'boxcar':
-            X_fft = fft(x_padded)
-            Y_fft = fft(y_padded, axis=0)
-    
-            psd = np.abs(X_fft) ** 2
-            csd = Y_fft * np.conj(X_fft)[:, None]
-            
-            window = get_window('boxcar', len(X_fft)//total_lags)
-            psd = fftconvolve(psd, window, mode='same')
-            csd = np.apply_along_axis(lambda m: fftconvolve(m, window, mode='same'), axis=0, arr=csd)
-
-        if self.smoothing_method == 'welch':
-            psd = welch(x_padded, nperseg=total_lags, axis=0, return_onesided=False)[1]
-            csd = np.apply_along_axis(
-                lambda m: welch_csd(x_padded, m, nperseg=total_lags, axis=0, return_onesided=False)[1],
-                axis=0,
-                arr=y_padded
-            )
-
-        if self.smoothing_method == 'resample':
-            X_fft = fft(x_padded)
-            Y_fft = fft(y_padded, axis=0)
-    
-            psd = np.abs(X_fft) ** 2
-            csd = Y_fft * np.conj(X_fft)[:, None]
-
-            psd = resample_array(psd, total_lags).squeeze()
-            csd = resample_array(csd, total_lags)
-        
-        # Initialize IRF
-        irf = np.zeros((total_lags, n_outputs))
-
-        norm_alpha = self.alpha*np.mean(psd)
-
-        # Estimate IRF in the frequency domain for each output
-        for i in range(n_outputs):
-            # Frequency-domain division (regularized if specified)
-            if self.regularization == 'ridge':
-                H_fft = csd[:, i] / (psd + norm_alpha + self.eps)
-            else:
-                H_fft = csd[:, i] / (psd + self.eps)
-
-            # Inverse FFT to get the impulse response
-            full_irf = np.real(ifft(H_fft))
-
-            # Align impulse response for the lag range [min_lag, max_lag]
-            irf[:, i] = np.roll(full_irf, self.max_lag)[:total_lags][::-1]
-
-        return irf
-
-    def _construct_lagged_matrix(self, x):
-        """
-        Construct a lagged matrix for the input signal, including negative and positive lags.
-
-        Parameters:
-        ----------
-        x : ndarray of shape (n_samples,)
-            Input signal.
-
-        Returns:
-        -------
-        X : ndarray of shape (n_samples, max_lag - min_lag + 1)
-            Lagged input matrix.
-        """
-        n_samples = len(x)
-        lags = range(self.min_lag, self.max_lag + 1)
-        X = np.zeros((n_samples, len(lags)))
-
-        for i, lag in enumerate(lags):
-            if lag < 0:
-                # Future input: shift x forward
-                X[-lag:, i] = x[:n_samples + lag]
-            elif lag > 0:
-                # Past input: shift x backward
-                X[:n_samples - lag, i] = x[lag:]
-            else:
-                # Zero lag
-                X[:, i] = x
-        return X
-
-
-class FourierTRFEstimatorMIMO:
     """
     Estimate the Impulse Response Function (IRF) of a system.
 
@@ -516,7 +182,7 @@ class FourierTRFEstimatorMIMO:
         # Align IRF to lag range
         for f in range(n_features):
             for o in range(n_outputs):
-                irf[:, f, o] = np.roll(H_time[:, f, o], -self.min_lag)[:total_lags]
+                irf[:, f, o] = np.roll(H_time[:, f, o], self.min_lag)[::-1][:total_lags]
     
         return irf
 
@@ -549,3 +215,744 @@ class FourierTRFEstimatorMIMO:
         # Concatenate all features side by side
         X = np.hstack(X_list)
         return X
+
+
+"""
+Classic TRF, mainly from pyEEG
+"""
+
+import numpy as np
+from sklearn.model_selection import KFold
+import matplotlib.pyplot as plt
+from mne.decoding import BaseEstimator
+from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
+from ..viz import get_spatial_colors
+from scipy import linalg
+import mne
+from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat
+from matplotlib import colormaps as cmaps
+
+# Memory cap (i.e. max usage).
+# By default set to 90% to prevent bricking machines in corner cases...
+MEM_CAP = 0.9
+
+
+class TRFEstimator(BaseEstimator):
+
+    def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., alpha=[0.], fit_intercept=False, mtype='forward', alpha_feat = False):
+        '''
+        This class implements the TRF model for s/M/EEG data.
+        times : mismatch a -> b, where a - dependent, b - predicted
+            Negative timelags indicate a lagging behind b
+            Positive timelags indicate b lagging behind a
+        tmin : float
+            Default: None
+            Minimum time lag (in seconds). Can be negative to check for lags in the past (~null model).
+        tmax : float
+            Default: None
+            Maximum time lag (in seconds). Can be large to check for lags in the future (~null model).
+        srate : float
+            Default: 1.
+            Sampling rate of the data.
+        alpha : list
+            Default: [0.]
+            Regularization parameter(s) for the model. If a list is provided, the model will be fitted for each alpha.
+            The fit is looping over alpha AFTER most matrix operations to optimize compute time. Careful, we weight matrices according to the
+            eigenvalues and this value of alpha is not directly equivalent to the one given in (XtX + alpha*I)XtY. Ideally, alpha should be computed for 
+            many values.
+        fit_intercept : bool
+            Default: False
+            Whether to fit an intercept term in the model.
+        mtype : str
+            Default: 'forward'
+            Forward or backward. Required for formatting coefficients in get_coef (convention: forward - stimulus -> eeg, backward - eeg - stimulus)
+        alpha_feat : bool
+            Default: False
+            Whether to compute alpha for each feature separately and fit them. If True, alpha will be modified to be a list of all possible combinations.
+            This increases computation time exponentially, only use if dealing with few very different regressors, or to check differences are minimal.
+
+        TODO:
+            - Implement a method to compute alpha from the data (e.g. nested cross-validation) directly in the function
+            - Give the possibility to compute alphas for each feature separately and fit them.
+        
+        '''
+
+        self.tmin = tmin
+        self.tmax = tmax
+        self.times = times
+        self.srate = srate
+        self.alpha = alpha
+        self.alpha_feat = alpha_feat
+        # Forward or backward. Required for formatting coefficients in get_coef (convention: forward - stimulus -> eeg, backward - eeg - stimulus)
+        self.mtype = mtype
+        self.fit_intercept = fit_intercept
+        self.fitted = False
+        self.lags = None
+
+        # All following attributes are only defined once fitted (hence the "_" suffix)
+        self.intercept_ = None
+        self.coef_ = None
+        self.n_feats_ = None
+        self.n_chans_ = None
+        self.feat_names_ = None
+        self.valid_samples_ = None
+        # Autocorrelation matrix of feature X (thus XtX) -> used for computing model using fit_from_cov
+        self.XtX_ = None
+        # Covariance matrix of features X and Y (thus XtX) -> used for computing model using fit_from_cov
+        self.XtY_ = None
+        # Scores when computed
+        self.scores = None
+
+    def fill_lags(self):
+        """Fill the lags attributes, with number of samples and times in seconds.
+        Note
+        ----
+        Necessary to call this function if one wishes to use trf.lags _before_
+        :func:`trf.fit` is called.
+
+        """
+        if (self.tmin != None) and (self.tmax != None):
+            # LOGGER.info("Will use lags spanning form tmin to tmax.\nTo use individual lags, use the `times` argument...")
+            self.lags = lag_span(self.tmin, self.tmax, srate=self.srate)[
+                ::-1]  # pylint: disable=invalid-unary-operand-type
+            # self.lags = lag_span(-tmax, -tmin, srate=srate) #pylint: disable=invalid-unary-operand-type
+            self.times = self.lags[::-1] / self.srate
+        else:
+            self.times = np.asarray(self.times)
+            self.lags = lag_sparse(self.times, self.srate)[::-1]
+
+    def get_XY(self, X, y, lagged=False, drop=True, feat_names=()):
+        '''
+        Preprocess X and y before fitting (finding mapping between X -> y)
+        Parameters
+        ----------
+        X : ndarray (T x nfeat)
+        y : ndarray (T x nchan)
+        lagged : bool
+            Default: False.
+            Whether the X matrix has been previously 'lagged' (intercept still to be added).
+        drop : bool
+            Default: True.
+            Whether to drop non valid samples (if False, non valid sample are filled with 0.)
+        feat_names : list
+            Names of features being fitted. Must be of length ``nfeats``.
+        Returns
+        -------
+        Features preprocessed for fitting the model.
+        X : ndarray (T x nlags * nfeats)
+        y : ndarray (T x nchan)
+        '''
+        self.fill_lags()
+
+        X = np.asarray(X)
+        y = np.asarray(y)
+
+        # Estimate the necessary size to compute stuff
+        y_memory = sum([yy.nbytes for yy in y]) if np.ndim(
+            y) == 3 else y.nbytes
+        estimated_mem_usage = X.nbytes * \
+            (len(self.lags) if not lagged else 1) + y_memory
+        if estimated_mem_usage/1024.**3 > MEM_CAP*mem_check():
+            raise MemoryError("Not enough RAM available! (needed %.1fGB, but only %.1fGB available)" % (
+                estimated_mem_usage/1024.**3, mem_check()))
+
+        # Fill n_feat and n_chan attributes
+        # if X has been lagged, divide by number of lags
+        self.n_feats_ = X.shape[1] if not lagged else X.shape[1] // len(
+            self.lags)
+        self.n_chans_ = y.shape[1] if y.ndim == 2 else y.shape[2]
+
+        # Assess if feat names corresponds to feat number
+        if feat_names:
+            err_msg = "Length of feature names does not match number of columns from feature matrix"
+            if lagged:
+                assert len(feat_names) == X.shape[1] // len(self.lags), err_msg
+            else:
+                assert len(feat_names) == X.shape[1], err_msg
+            self.feat_names_ = feat_names
+
+        # this include non-valid samples for now
+        n_samples_all = y.shape[0] if y.ndim == 2 else y.shape[1]
+
+        # drop samples that can't be reconstructed because on the edge, all is true otherwise
+        if drop:
+            self.valid_samples_ = np.logical_not(np.logical_or(np.arange(n_samples_all) < abs(max(self.lags)),
+                                                               np.arange(n_samples_all)[::-1] < abs(min(self.lags))))
+        else:
+            self.valid_samples_ = np.ones((n_samples_all,), dtype=bool)
+
+        # Creating lag-matrix droping NaN values if necessary
+        y = y[self.valid_samples_, :] if y.ndim == 2 else y[:,
+                                                            self.valid_samples_, :]
+        if not lagged:
+            X = lag_matrix(X, lag_samples=self.lags,
+                           drop_missing=drop, filling=np.nan if drop else 0.)
+
+        return X, y
+
+    def fit(self, X, y, lagged=False, drop=True, feat_names=()):
+        """Fit the TRF model.
+        Mapping X -> y. Note the convention of timelags and type of model for seamless recovery of coefficients.
+        Parameters
+        ----------
+        X : ndarray (nsamples x nfeats)
+        y : ndarray (nsamples x nchans)
+        lagged : bool
+            Default: False.
+            Whether the X matrix has been previously 'lagged' (intercept still to be added).
+        drop : bool
+            Default: True.
+            Whether to drop non valid samples (if False, non valid sample are filled with 0.)
+        feat_names : list
+            Names of features being fitted. Must be of length ``nfeats``.
+        Returns
+        -------
+        coef_ : ndarray (alphas x nlags x nfeats)
+        intercept_ : ndarray (nfeats x 1)
+        """
+
+        # Preprocess and lag inputs
+        X, y = self.get_XY(X, y, lagged, drop, feat_names)
+
+
+        # Adding intercept feature:
+        if self.fit_intercept:
+            X = np.hstack([np.ones((len(X), 1)), X])
+
+        # Regress with Ridge to obtain coef for the input alpha
+        self.coef_ = _ridge_fit_SVD(X, y, self.alpha, alpha_feat = self.alpha_feat, n_feat=self.n_feats_)
+
+        # Reshaping and getting coefficients
+        if self.fit_intercept:
+            self.intercept_ = self.coef_[0, np.newaxis, :]
+            self.coef_ = self.coef_[1:, :]
+
+        self.fitted = True
+
+        return self
+
+    def get_coef(self):
+        '''
+        Format and return coefficients. Note mtype attribute needs to be declared in the __init__.
+
+        Returns
+        -------
+        coef_ : ndarray (nlags x nfeats x nchans x regularization params)
+        '''
+        if np.ndim(self.alpha) == 0:
+            betas = np.reshape(self.coef_, (len(self.lags),
+                                            self.n_feats_, self.n_chans_))
+        elif self.alpha_feat:
+            betas = np.reshape(self.coef_, (len(self.lags),
+                                            self.n_feats_, self.n_chans_, np.power(len(self.alpha), self.n_feats_)))
+        else:
+            betas = np.reshape(self.coef_, (len(self.lags),
+                                            self.n_feats_, self.n_chans_, len(self.alpha)))
+
+        if self.mtype == 'forward':
+            betas = betas[::-1, :]
+
+        return betas
+
+    def add_cov(self, X, y, lagged=False, drop=True, n_parts=1):
+        '''
+        Compute and add (with normalization factor) covariance matrices XtX, XtY
+        For v. large population models when it's not possible to load all the data to memory at once.
+        Parameters
+        ----------
+        X : ndarray (nsamples x nfeats) or list/tuple of ndarray (from which the model will be computed)
+        y : ndarray (nsamples x nchans) or list/tuple of ndarray (from which the model will be computed)
+        lagged : bool
+            Default: False.
+            Whether the X matrix has been previously 'lagged' (intercept still to be added).
+        drop : bool
+            Default: True.
+            Whether to drop non valid samples (if False, non valid sample are filled with 0.)
+        n_parts : number of parts from which the covariance matrix are computed (required for normalization)
+            Default: 1
+        Returns
+        -------
+        XtX : autocorrelation matrix for X (accumulated)
+        XtY : covariance matrix for X & Y (accumulated)
+        '''
+        if isinstance(X, (list, tuple)) and n_parts > 1:
+
+            assert len(X) == len(y)
+
+            for part in range(len(X)):
+                assert len(X[part]) == len(y[part])
+                X_part, y_part = self.get_XY(X[part], y[part], lagged, drop)
+                XtX = _get_covmat(X_part, X_part)
+                XtY = _get_covmat(X_part, y_part)
+                norm_pool_factor = np.sqrt(
+                    (n_parts*X_part.shape[0] - 1)/(n_parts*(X_part.shape[0] - 1)))
+
+                if self.XtX_ is None:
+                    self.XtX_ = XtX*norm_pool_factor
+                else:
+                    self.XtX_ += XtX*norm_pool_factor
+
+                if self.XtY_ is None:
+                    self.XtY_ = XtY*norm_pool_factor
+                else:
+                    self.XtY_ += XtY*norm_pool_factor
+
+        else:
+
+            X_part, y_part = self.get_XY(X, y, lagged, drop)
+
+            self.XtX_ = _get_covmat(X_part, X_part)
+            self.XtY_ = _get_covmat(X_part, y_part)
+
+        return self
+
+    def fit_direct_cov(self, XXcov=None, XYcov=None, clear_after=True):
+
+        self.XtX_ = XXcov
+        self.XtY_ = XYcov
+
+        self.fit_intercept = False
+        self.intercept_ = None
+        self.coef_ = _ridge_fit_SVD(
+            self.XtX_, self.XtY_, self.alpha, from_cov=True, alpha_feat = self.alpha_feat, n_feat = self.n_feats_)
+        self.fitted = True
+
+        if clear_after:
+            self.clear_cov()
+
+        return self
+
+    def fit_from_cov(self, X=None, y=None, lagged=False, drop=True, overwrite=True, part_length=150., clear_after=True):
+        '''
+        Fit model from covariance matrices (handy for v. large data).
+        Note: This method is intercept-agnostic. It's recommended to standardize the input data and avoid fitting intercept in the first place.
+        Otherwise, the intercept can be estimated as mean values for each channel of y.
+        Parameters
+        ----------
+        X : ndarray (nsamples x nfeats), if None, model will be fitted from accumulated XtX & XtY
+            Default: None
+        y : ndarray (nsamples x nchans), if None, model will be fitted from accumulated XtX & XtY
+            Default: None
+        lagged : bool
+            Default: False.
+            Whether the X matrix has been previously 'lagged' (intercept still to be added).
+        drop : bool
+            Default: True.
+            Whether to drop non valid samples (if False, non valid sample are filled with 0.)
+        overwrite : bool
+            Default: True
+            Whether to reset the accumulated covariance matrices (when X and Y are not None)
+        part_length : integer | float
+            Default: 150 (seconds) ~ 2.5 minutes. Estimate what will fit in RAM.
+            Size of the parts in which the data will be chopped for fitting the model (when X and Y are provided).
+        Returns
+        -------
+        coef_ : ndarray (alphas x nlags x nfeats)
+        TODO:
+        - Introduce overlap between the segments to prevent losing data (minor, but it should yield exact results)
+        '''
+
+        # If X and y are not none, chop them into pieces, compute cov matrices and fit the model (memory efficient)
+        if (X is not None) and (y is not None):
+            if overwrite:
+                self.clear_cov()  # If overwrite, wipe clean
+
+            part_length = int(part_length*self.srate)  # seconds to samples
+
+            assert X.shape[0] == y.shape[0]
+
+            # ToDo -> add padding to the segment to spare some data...
+            segments = [(part_length * i) + np.arange(part_length)
+                        for i in range(X.shape[0] // part_length)]  # Indices making up segments
+
+            if X.shape[0] % part_length > part_length/2:
+                # Create new segment from leftover data (if more than 1/2 part length)
+                segments = segments + [np.arange(segments[-1][-1], X.shape[0])]
+            else:
+                # Add letover data to the last segment
+                segments[-1] = np.concatenate((segments[-1],
+                                               np.arange(segments[-1][-1], X.shape[0])))
+
+            X = [X[segments[i], :] for i in range(len(segments))]
+            y = [y[segments[i], :] for i in range(len(segments))]
+
+            self.add_cov(X, y, lagged=False, drop=True, n_parts=len(segments))
+
+        self.fit_intercept = False
+        self.intercept_ = None
+        self.coef_ = _ridge_fit_SVD(
+            self.XtX_, self.XtY_, self.alpha, from_cov=True,
+            alpha_feat = self.alpha_feat, n_feat=self.n_feats_)
+        self.fitted = True
+
+        if clear_after:
+            self.clear_cov()
+
+        return self
+
+    def clear_cov(self):
+        '''
+        Wipe clean / reset covariance matrices.
+        '''
+        # print("Clearing saved covariance matrices...")
+        self.XtX_ = None
+        self.XtY_ = None
+        return self
+
+    def predict(self, X):
+        """Compute output based on fitted coefficients and feature matrix X.
+        Parameters
+        ----------
+        X : ndarray
+            Matrix of features (can be already lagged or not).
+        Returns
+        -------
+        ndarray
+            Reconstruction of target with current beta estimates
+        Notes
+        -----
+        If the matrix onky has features in its column (not yet lagged), the lagged version
+        of the feature matrix will be created on the fly (this might take some time if the matrix
+        is large).
+        """
+        assert self.fitted, "Fit model first!"
+
+        if self.fit_intercept:
+            betas = np.concatenate((self.intercept_, self.coef_), axis=0)
+        else:
+            #betas = self.get_coef()[:]
+            betas = self.coef_[:]
+
+        # Check if input has been lagged already, if not, do it:
+        if X.shape[1] != int(self.fit_intercept) + len(self.lags) * self.n_feats_:
+            # LOGGER.info("Creating lagged feature matrix...")
+            X = lag_matrix(X, lag_samples=self.lags, filling=0.)
+            if self.fit_intercept:  # Adding intercept feature:
+                X = np.hstack([np.ones((len(X), 1)), X])
+
+        # Do it for every alpha
+        pred = np.stack([X.dot(betas[..., i])
+                         for i in range(betas.shape[-1])], axis=-1)
+
+        return pred  # Shape T x Nchan x Alpha
+
+    def score(self, Xtest, ytrue, Xtrain = None, scoring="R2"):
+        """Compute a score of the model given true target and estimated target from Xtest.
+        Parameters
+        ----------
+        Xtest : ndarray
+            Array used to get "yhat" estimate from model
+        ytrue : ndarray
+            True target
+        scoring : str (or func in future?)
+            Scoring function to be used ("corr", "rmse", "R2")
+        Returns
+        -------
+        float
+            Score value computed on whole segment.
+        """
+        yhat = self.predict(Xtest)
+        window_length = self.times.shape[0]
+        if self.alpha_feat:
+            reg_len = np.power(len(self.alpha), self.n_feats_)
+        else:
+            reg_len = len(self.alpha)
+        alpha = self.alpha
+        lags = self.lags
+        if scoring == 'corr':
+            scores = np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        elif scoring == 'rmse':
+            scores = np.stack([_rmse_multifeat(yhat[..., a], ytrue) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        elif scoring == 'R2':
+            scores = np.stack([_r2_multifeat(yhat[..., a], ytrue) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        elif scoring == 'rankcorr':
+            scores = np.stack([_rankcorr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        elif scoring == 'ezekiel':
+            scores = np.stack([_ezr2_multifeat(yhat[..., a], ytrue, Xtest, window_length) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        elif scoring == 'adj_R2':
+            scores = np.stack([_adjr2_multifeat(yhat[..., a], ytrue, Xtrain, Xtest, alpha[a], lags) for a in range(reg_len)], axis=-1)
+            self.scores = scores
+            return scores
+        else:
+            raise NotImplementedError(
+                "Only correlation & RMSE scores are valid for now...")
+
+    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="R2", segment_length=None, fit_mode='direct', verbose=True):
+        '''
+        Standard cross-validation. Scoring
+        Parameters
+        ----------
+        X : ndarray (nsamples x nfeats)
+        y : ndarray (nsamples x nchans)
+        n_splits : integer (default: 5)
+            Number of folds
+        lagged : bool
+            Default: False.
+            Whether the X matrix has been previously 'lagged' (intercept still to be added).
+        drop : bool
+            Default: True.
+            Whether to drop non valid samples (if False, non valid sample are filled with 0.)
+        train_full : bool (default: True)
+            Train model using all the available data after the end of x-val
+        scoring : string (default: "corr")
+            Scoring method (see scoring())
+        segment_length: integer, float (default: None)
+            Length of a testing segments (that testing data will be chopped into). If None, use all the available data.
+        fit_mode : string {'direct' | 'from_cov_xxx'} (default: 'direct')
+            Model training mode. Options:
+            'direct' - fit using all the avaiable data at once (i.e. fit())
+            'from_cov_xxx' - fit using all the avaiable data from covariance matrices. 
+            The routine will chop data into pieces, compute piece-wise cov matrices and fit the model.
+            'xxx' portion of the string indicates the lenght of the segments that the data will be chopped into. 
+            If not declared (i.e. 'from_cov') the default 2.5 minutes will be used.
+        verbose : bool (defaul: True)
+        Returns
+        -------
+        scores - ndarray (n_splits x segments x nchans x alpha)
+        ToDo:
+        - implement standard scaler / normalizer (optional)
+        - handle different scores
+        '''
+
+        #if np.ndim(self.alpha) < 1 or len(self.alpha) <= 1:
+        #    raise ValueError(
+        #        "Supply several alphas to TRF constructor to use this method.")
+
+        if segment_length:
+            segment_length = segment_length*self.srate  # time to samples
+
+        self.fill_lags()
+
+        self.n_feats_ = X.shape[1] if not lagged else X.shape[1] // len(
+            self.lags)
+        self.n_chans_ = y.shape[1] if y.ndim == 2 else y.shape[2]
+
+        if self.alpha_feat:
+            reg_len = np.power(len(self.alpha), self.n_feats_)
+        else:
+            reg_len = len(self.alpha)
+
+        kf = KFold(n_splits=n_splits)
+        if segment_length:
+            scores = []
+        else:
+            scores = np.zeros((n_splits, self.n_chans_, reg_len))
+
+        for kfold, (train, test) in enumerate(kf.split(X)):
+            if verbose:
+                print("Training/Evaluating fold %d/%d" % (kfold+1, n_splits))
+
+            # Fit using trick with adding covariance matrices -> saves RAM
+            if fit_mode.find('from_cov') > -1:
+                # Format 'from_cov_xxx' -> xxx - duration of a single part.
+                # The main idea is to chunk the data into bite-sized parts that will fit in the RAM
+                # Careful with the chunking of data
+                if len(fit_mode.split('_')) == 2:
+                    part_lenght = 150
+                elif len(fit_mode.split('_')) == 3:
+                    part_lenght = int(fit_mode.split('_')[-1])
+                self.fit_from_cov(X[train, :], y[train, :],
+                                  overwrite=True, part_length=part_lenght)
+            else:  # Fit directly -> slightly faster, but uses more RAM
+                self.fit(X[train, :], y[train, :])
+
+            if segment_length:  # Chop testing data into smaller pieces
+
+                if (len(test) % segment_length) > 0:  # Crop if there are some odd samples
+                    test_crop = test[:-int(len(test) % segment_length)]
+                else:
+                    test_crop = test[:]
+
+                # Reshape to # segments x segment duration
+                test_segments = test_crop.reshape(
+                    int(len(test_crop) / segment_length), -1)
+
+                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :], scoring=scoring, Xtrain = X[train, :]) for i in range(
+                    test_segments.shape[0])]  # Evaluate each segment
+
+                scores.append(ccs)
+            else:  # Evaluate using the entire testing data
+                scores[kfold, :] = self.score(X[test, :], y[test, :], scoring=scoring, Xtrain = X[train, :])
+
+        if segment_length:
+            scores = np.asarray(scores)
+
+        if train_full:
+            if verbose:
+                print("Fitting full model...")
+            # Fit using trick with adding covariance matrices -> saves RAM
+            if fit_mode.find('from_cov') > -1:
+                self.fit_from_cov(X, y, overwrite=True,
+                                  part_length=part_lenght)
+            else:
+                self.fit(X, y)
+        self.scores = scores
+
+        return scores
+
+    def __getitem__(self, feats):
+        "Extract a sub-part of TRF instance as a new TRF instance (useful for plotting only some features...)"
+        # Argument check
+        if self.feat_names_ is None:
+            if np.ndim(feats) > 0:
+                assert isinstance(
+                    feats[0], int), "Type not understood, feat_names are ot defined, can only index with int"
+                indices = feats
+
+            else:
+                assert isinstance(
+                    feats, int), "Type not understood, feat_names are ot defined, can only index with int"
+                indices = [feats]
+                feats = [feats]
+        else:
+            if np.ndim(feats) > 0:
+                assert all([f in self.feat_names_ for f in feats]
+                           ), "an element in argument %s in not present in %s" % (feats, self.feat_names_)
+                indices = [self.feat_names_.index(f) for f in feats]
+            else:
+                assert feats in self.feat_names_, "argument %s not present in %s" % (
+                    feats, self.feat_names_)
+                indices = [self.feat_names_.index(feats)]
+                feats = [feats]
+
+        trf = TRFEstimator(tmin=self.tmin, tmax=self.tmax,
+                           srate=self.srate, alpha=self.alpha)
+        trf.coef_ = self.coef_[:, indices]
+        trf.feat_names_ = feats
+        trf.n_feats_ = len(feats)
+        trf.n_chans_ = self.n_chans_
+        trf.fitted = True
+        trf.times = self.times
+        trf.lags = self.lags
+        trf.intercept_ = self.intercept_
+
+        return trf
+
+    def __repr__(self):
+        obj = """TRFEstimator(
+            alpha=%s,
+            fit_intercept=%s,
+            srate=%s,
+            tmin=%s,
+            tmax=%s,
+            n_feats=%s,
+            n_chans=%s,
+            n_lags=%s,
+            features : %s
+        )
+        """ % (self.alpha, self.fit_intercept, self.srate, self.tmin, self.tmax,
+               self.n_feats_, self.n_chans_, len(self.lags) if self.lags is not None else None, str(self.feat_names_))
+        return obj
+
+    def __add__(self, other_trf):
+        "Make available the '+' operator. Will simply add coefficients. Be mindful of dividing by the number of elements later if you want the true mean."
+        assert (other_trf.n_feats_ == self.n_feats_ and other_trf.n_chans_ ==
+                self.n_chans_), "Both TRF objects must have the same number of features and channels"
+        trf = TRFEstimator(tmin=self.tmin, tmax=self.tmax,
+                           srate=self.srate, alpha=self.alpha)
+        trf.coef_ = np.sum([self.coef_, other_trf.coef_], 0)
+        trf.intercept_ = np.sum([self.intercept_, other_trf.intercept_], 0)
+        trf.feat_names_ = self.feat_names_
+        trf.n_feats_ = self.n_feats_
+        trf.n_chans_ = self.n_chans_
+        trf.fitted = True
+        trf.times = self.times
+        trf.lags = self.lags
+
+        return trf
+
+    def get_best_alpha(self):
+        best_alpha = np.zeros(self.n_chans_)
+        for chan in range(self.n_chans_):
+            if len(self.scores.shape) == 3:
+                best_alpha[chan] = np.argmax(np.mean(self.scores[:,chan,:],axis=0))
+            else:
+                best_alpha[chan] = np.argmax(self.scores[:,chan,:],axis=0)
+        return best_alpha.astype(int)
+
+
+    def plot_score(self, figax = None, figsize = (5,5), color_type = 'rainbow', 
+                   channels = [], title = 'R2 sumary', minR2 = -np.inf):
+        if figax == None:
+            fig,ax = plt.subplots(figsize = figsize)
+        else:
+            fig,ax = figax
+        if len(channels) == 0:
+            channels = np.arange(self.scores.shape[1])
+
+        #Extract Coef
+        color_map = dict()
+        for index_channel in range(self.scores.shape[1]):
+            color_map[index_channel] = cmaps[color_type](index_channel/self.scores.shape[1])
+
+        for index_channel in range(self.scores.shape[1]):
+            score_chan = np.mean(self.scores[:,index_channel,:],axis = 0)
+            if np.max(score_chan > minR2):
+                ax.plot(self.alpha, score_chan, color = color_map[index_channel], linewidth = 1.5, label = channels[index_channel])
+        ax.set_title(title)
+        ax.set_xlabel('Alpha')
+        ax.set_ylabel('R2')
+        ax.set_xticks(self.alpha)
+        ax.set_xscale('log')
+        ax.plot(self.alpha, np.mean(self.scores[:,:,:],axis = (0,1)), color = 'k', linewidth = 3, linestyle = '--')
+        ax.legend()
+
+
+        return fig, ax
+
+    def plot_kernel(self, figax = None, figsize = False, color_type = 'rainbow', center_line = True,
+                    channels = None, features = None, title = 'kernel sumary', minR2 = -np.inf):
+        """Plot the TRF of the feature requested as a *butterfly* plot"""
+        if not figsize:
+            figsize = (15, (self.n_feats_) * 4)
+        if figax is None:
+            fig,ax = plt.subplots(self.n_feats_,figsize = figsize, sharex = True)
+        else:
+            fig,ax = figax
+        if channels == None:
+            channels = np.arange(self.n_chans_)
+        if features == None:
+            features = np.arange(self.n_feats_)
+
+
+        color_map = dict()
+        for index_channel in range(self.n_chans_):
+            color_map[index_channel] = cmaps[color_type](index_channel/self.n_chans_)
+
+        best_alpha = self.get_best_alpha()
+        for feat_index in range(self.n_feats_):
+            feat = features[feat_index]
+            if self.n_feats_ > 1:
+                axfeat = ax[feat_index]
+            else:
+                axfeat = ax
+            for chan_index in range(self.n_chans_):
+                alpha_index = best_alpha[chan_index]
+                chan = channels[chan_index]
+                score_chan = np.mean(self.scores[:,chan_index,:],axis = 0)
+                if np.max(score_chan > minR2):
+
+                    axfeat.plot(self.times, self.get_coef()[:,feat_index,chan_index, alpha_index], color = color_map[chan_index], linewidth = 1.5, label = chan)
+                    axfeat.set_xlabel('Time (s)')
+                    axfeat.set_ylabel(feat)
+            if center_line:
+                axfeat.plot([0,0],[np.min(self.get_coef()[:,feat_index,:, alpha_index]),np.max(self.get_coef()[:,feat_index,:, alpha_index])], color = 'k', linewidth = 1.5, linestyle = '--')
+        handles, labels = axfeat.get_legend_handles_labels()
+        fig.legend(handles, labels, bbox_to_anchor=(1.15, 0.8),loc='right')
+        if self.n_feats_ > 1:
+            ax[0].set_title(title)
+        else:
+            ax.set_title(title)
+        return fig,ax
+
+

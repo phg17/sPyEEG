@@ -17,6 +17,11 @@ import itertools
 from time import time as chrono
 from scipy.linalg import sqrtm
 from scipy.stats import pearsonr
+from scipy.signal.windows import get_window
+from scipy.stats import pearsonr
+from scipy.fft import fft, ifft
+from scipy.signal import fftconvolve, welch
+from scipy.signal import csd as welch_csd
 
 
 def _get_covmat(x, y):
@@ -208,7 +213,8 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat 
     -------
     model_coef : ndarray (model_feats* x alphas) *-specific shape depends on the model
 
-    TO DO: allows to input specific alpha matrices rather than computing all cominations.
+    TO DO:  - allows to input specific alpha matrices rather than computing all cominations.
+            - allow for different lag for different features
     '''
     # Compute covariance matrices
     if not from_cov:
@@ -265,6 +271,47 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat 
             coeff.append(np.dot(V, (z/(S + nl*l)[:, np.newaxis])))
     
     return np.stack(coeff, axis=-1)
+
+
+def _fourier_fit(x, y, alpha=[0.], lags = [-1,1]):
+    """
+    Estimate the IRF in the frequency domain using FFT (MIMO supported).
+    """
+    n_samples, n_features = x.shape
+    n_samples, n_outputs = y.shape
+    min_lag, max_lag = lags.min(), lags.max()
+    total_lags = max_lag - min_lag + 1
+    x_padded = np.pad(x, ((0, total_lags), (0, 0)), mode='constant')
+    y_padded = np.pad(y, ((0, total_lags), (0, 0)), mode='constant')
+
+    X_fft = fft(x_padded, axis=0)  # Shape: (n_samples + total_lags, n_features)
+    Y_fft = fft(y_padded, axis=0)  # Shape: (n_samples + total_lags, n_outputs)
+
+    S_xy = X_fft[:, :, None] @ Y_fft[:, None, :].conjugate()
+    S_xx = X_fft[:, :, None] @ X_fft[:, None, :].conjugate()
+
+    S_xy = resample_array(S_xy, total_lags*2)
+    S_xx = resample_array(S_xx, total_lags*2)
+
+    window = get_window('boxcar', 2)
+    S_xy = np.apply_along_axis(lambda m: fftconvolve(m, window, mode='same'), axis=0, arr=S_xy)
+    S_xx = np.apply_along_axis(lambda m: fftconvolve(m, window, mode='same'), axis=0, arr=S_xx)
+    
+    irf = np.zeros((total_lags, n_features, n_outputs, len(alpha)))
+
+    for a_index, a in enumerate(alpha):
+        reg_matrix = a * np.eye(S_xx.shape[-1])[None, :, :] * np.diag(np.mean(S_xx, axis=0).real).mean()
+        H_fft = np.linalg.inv(S_xx + reg_matrix) @ S_xy
+
+        # Convert transfer function back to time domain
+        H_time = np.real(ifft(H_fft, axis=0))  # Time-domain transfer function
+    
+        # Align IRF to lag range
+        for f in range(n_features):
+            for o in range(n_outputs):
+                irf[:, f, o, a_index] = np.roll(H_time[:, f, o], max_lag)[:total_lags]
+
+    return np.vstack(irf)
 
 def _b2b(t,X1,X2,Y1,Y2, alphax, alphay):
     y1 = Y1[:,t,:]
@@ -393,4 +440,56 @@ def _inverse_square_root(m):
     '''
 
     return np.linalg.inv(sqrtm(m))
+
+
+def resample_array(array, new_length):
+    """
+    Resamples an array to a fixed number of points using average pooling.
+
+    Parameters:
+        array (np.ndarray): The input array to resample. Can be 1D or multi-channel (e.g., 2D for multi-channel).
+        new_length (int): The desired length of the output array.
+
+    Returns:
+        np.ndarray: The resampled array.
+    """
+    if new_length <= 0:
+        raise ValueError("new_length must be greater than 0.")
+
+    # Handle multi-channel arrays
+    if array.ndim == 1:
+        array = array[:, np.newaxis]
+
+    # Original array length
+    old_length = array.shape[0]
+
+    if old_length == new_length:
+        return array.copy() if array.ndim == 1 else array.copy().squeeze()
+
+    # Compute the resampling ratio
+    ratio = old_length / new_length
+
+    # Create new indices
+    new_indices = np.linspace(0, old_length, new_length, endpoint=False)
+
+    # Initialize the resampled array
+    resampled = np.zeros((new_length, *[array.shape[i] for i in range(1, len(array.shape))]), dtype=array.dtype)
+
+    # Average pooling for the segments
+    for i in range(new_length):
+        # Determine the range of indices in the original array that contribute to this output index
+        start_idx = int(np.floor(i * ratio))
+        end_idx = int(np.ceil((i + 1) * ratio))
+
+        # If the range is within bounds, compute the mean
+        if end_idx > start_idx:
+            resampled[i] = np.mean(array[start_idx:end_idx], axis=0)
+        else:
+            # Interpolate for fractional indices
+            lower_idx = min(start_idx, old_length - 1)
+            upper_idx = min(end_idx, old_length - 1)
+            weight = (i * ratio - lower_idx)
+            resampled[i] = (1 - weight) * array[lower_idx] + weight * array[upper_idx]
+
+    return resampled
 
