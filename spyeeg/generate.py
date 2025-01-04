@@ -155,6 +155,40 @@ def simulate_multisensory_channels(n_feat = 1, n_channels = 1,
     return time_array, X, Y1,Y2,Y12, events, impulse_responses
 
 
+import numpy as np
+
+def mix_signal_noise(signal, noise, snr_db):
+    """
+    Mix a signal and noise according to a specified signal-to-noise ratio (SNR).
+    
+    Parameters:
+    - signal (np.ndarray): The time series representing the signal.
+    - noise (np.ndarray): The time series representing the noise.
+    - snr_db (float): The desired signal-to-noise ratio in decibels (dB).
+    
+    Returns:
+    - mixed (np.ndarray): The resulting time series with the signal and noise mixed.
+    """
+    # Ensure signal and noise have the same length
+    if len(signal) != len(noise):
+        raise ValueError("Signal and noise must have the same length.")
+    
+    # Compute the power of the signal and noise
+    signal_power = np.mean(signal**2)
+    noise_power = np.mean(noise**2)
+    
+    # Compute the scaling factor for the noise based on the desired SNR
+    snr_linear = 10 ** (snr_db / 10)  # Convert SNR from dB to linear scale
+    scaling_factor = np.sqrt(signal_power / (noise_power * snr_linear))
+    
+    # Scale the noise and mix it with the signal
+    scaled_noise = noise * scaling_factor
+    mixed = signal + scaled_noise
+    
+    return mixed
+
+
+
 
 
         
