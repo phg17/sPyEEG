@@ -16,7 +16,25 @@ from mne.filter import filter_data
 
 
 def simulate_continuous_stimuli(fs, time_array, mode = 'AR', phi = 1.1, noise_std = 0.9):
+    """
+    Generate an arbitrary time series representing a continuous stimuli. This can be done using either
+    convolutions of random sine waves, or an autoregressive(AR) model. 
+    Using the autocorrelation methods avoid having stimuli with strong periodicity, which typically creates
+    artifacts when fitting the different models.
+
+    Parameters:
+        fs (int): The sampling frequency of the signal, in Hz.
+        time_array (ndarray): The different timesteps, typically a range from 0 to N-1 for N timepoints.
+        mode (str): Methods to generate the arbitrary stimuli. Must be either 'AR' or 'autocorrelation'.
+        phi (float): Autoregression coefficient.
+        noise_std: The standard deviation of the Gaussian noise used in the AR model.
+
+    Returns:
+        ndarray: An arbitrary continuous stimuli.
+    """
     if mode == 'convolution':
+        #Generate a set of random periodic signals and then convolve them
+        
         signal1 = np.random.randint(1,100) * np.sin(2*np.pi*np.random.randint(1,20)*time_array/fs) + np.cos(2*np.pi*np.random.randint(1,80)*time_array/fs) + np.cos(2*np.pi*np.random.randint(1,84)*time_array/fs)
         signal2 = np.random.randint(1,100) * np.sin(2*np.pi*np.random.randint(1,40)*time_array/fs) + np.cos(2*np.pi*np.random.randint(1,60)*time_array/fs) + np.cos(2*np.pi*np.random.randint(1,80)*time_array/fs)
         signal3 = np.random.randint(1,100) * np.sin(2*np.pi*np.random.randint(1,60)*time_array/fs) + np.cos(2*np.pi*np.random.randint(1,40)*time_array/fs) + np.cos(2*np.pi*np.random.randint(1,20)*time_array/fs)
@@ -24,7 +42,10 @@ def simulate_continuous_stimuli(fs, time_array, mode = 'AR', phi = 1.1, noise_st
         y1 = convolve(signal1*signal2, signal3*signal4, 'same')
         y2 = convolve(signal1*signal3, signal2*signal4, 'same')
         y = convolve(y1,y2, 'same')
+        
     elif mode == 'AR':
+        #Generate datapoints step by step using the previous one and add noise.
+        
         n_samples = time_array.shape[0]
         phi = 0.9
         noise_std = 0.5
@@ -32,18 +53,42 @@ def simulate_continuous_stimuli(fs, time_array, mode = 'AR', phi = 1.1, noise_st
         y = np.zeros(n_samples)
         for t in range(1,n_samples):
             y[t] = phi * y[t-1] + noise[t]
+    else:
+        raise ValueError(f"Invalid value for 'mode': {mode}. Must be one of AR or convolution.")
 
     return y
 
 def simulate_channels(n_feat = 2, n_channels = 3, 
                       fs = 100, T = 60, 
-                      noise_level = 0, beta_noise = 0,
+                      snr_db = 0, beta_noise = 0,
                       stim_type = 'discrete', n_pulse = 120, share_events = True, 
                       weights_feat = [], weights_channel = [],
                       compression_factor = 1, 
                       impulse_freqs = [0.1,10], decreasing_rates = [0.1,20], delays = [0.06,0.2], filter_impulse = False,
                       share_impulse = False,
                       random_seed = 0, scale_data = True):
+    """
+    Simulate M/sE/EEG channels as the combination of responses to arbitrary features and noise. 
+    This supposedly models a linear time invariant system, considering noise as every process other than 
+    the one in response to the stimuli. There is the possibility to change the number of channels, the
+    general shape and weights of impulse responses corresponding to different features, noise color and amplitude, 
+    as well as to add a non-linear compression factor.
+    
+    Parameters:
+        n_feat (int): The number of features of the stimuli.
+        n_channels (int): The number of channels to simulate.
+        fs (float): The sampling frequency, in Hz.
+        T (float): The duration of the signal to simulate, in s.
+        snd_db (float): The signal to noise, in dB. If equal to 0
+        beta_noise (float): The parameter used in noise generation. 
+                            if 0, equivalent to pure white noise.
+                            if 1, equivalent to pure pink noise.
+        stim_type (str): whether to use discrete or continuous features. must be either 'discrete' or 'continuous'.
+        n_pulse (int): In the case of discrete features, the number of events to consider.
+        share_events (bool): whether different features are related to the same set of events.
+        weights_feat (list):
+        
+    """
     np.random.seed(random_seed)
     if len(weights_feat) == 0:
         weights_feat = np.ones(n_feat)/n_feat
@@ -77,6 +122,8 @@ def simulate_channels(n_feat = 2, n_channels = 3,
         for i_feat in range(n_feat):
             y = simulate_continuous_stimuli(fs, time_array)
             events[i_feat,:] = MinMaxScaler(feature_range=(-1,1)).fit_transform(y.reshape(-1, 1)).reshape(-1)
+    else:
+        raise ValueError(f"Invalid value for 'stim_type': {stim_type}. Must be one of discrete or continuous.")
 
     for i_feat in range(n_feat):
         for i_channel in range(n_channels):
@@ -94,10 +141,11 @@ def simulate_channels(n_feat = 2, n_channels = 3,
             X = scale_discrete(X)
     for i_channel in range(n_channels):
         for i_feat in range(n_feat):
-            noise = cn.powerlaw_psd_gaussian(beta_noise, n_samples) * noise_level
             nonlinear_events[i_feat,:] = np.power(np.abs(events[i_feat,:]), compression_factor) * np.sign(events[i_feat,:])
-            response[i_channel] += weights_feat[i_feat]*convolve(nonlinear_events[i_feat,:], impulse_responses[i_feat, i_channel,:])[:n_samples] + noise
-    
+            response[i_channel] += weights_feat[i_feat]*convolve(nonlinear_events[i_feat,:], impulse_responses[i_feat, i_channel,:])[:n_samples]
+        noise = cn.powerlaw_psd_gaussian(beta_noise, n_samples)
+        response[i_channel] = mix_signal_noise(response[i_channel], noise, snr_db)
+
     Y = response.T
     if scale_data:
         Y = scale(Y, axis = 0)
