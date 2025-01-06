@@ -18,8 +18,6 @@ More detailed explanation can be found in examples.
 
    usage
 
-
-
 .. toctree::
    :maxdepth: 1
    :caption: Models:

@@ -36,7 +36,11 @@ extensions = [
 ]
 
 bibtex_bibfiles = ['refs.bib']
-templates_path = ['_templates']
+templates_path = ['_templates',
+                #'templates/autosummary/function.rst',
+                #'templates/autosummary/class.rst',
+                #'templates/autosummary/layout.html'
+                ]
 
 
 # Optional: Exclude unwanted files from processing
@@ -47,7 +51,15 @@ exclude_patterns = ['**.ipynb_checkpoints', '_build', 'Thumbs.db', '.DS_Store'] 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'alabaster'
+#html_theme = "sphinx_rtd_theme"
+#html_theme = "furo"
+html_theme = "sphinx_book_theme"
+#html_theme = "pydata_sphinx_theme"
+
+html_theme_options = {
+    "show_toc_level" : 1,
+}
+
 html_static_path = ['_static']
 
 
@@ -58,22 +70,26 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 #Autodoc Options
+
 autodoc_default_options = {
     'members': True,
     'undoc-members': True,
     'private-members': True,
-    'special-members': '__init__',
-    'inherited-members': True,
+    'special-members': None,
+    'inherited-members': 1,
     'show-inheritance': True,
+    'member-order' : 'bysource',
 }
 
-autodoc_typehints = "description"
+#autodoc_typehints = "description"
 autosummary_generate = True
 
 # Optional: Configure nbsphinx
 nbsphinx_allow_errors = True  # Continue building even if notebooks have errors
 
-# -- Options for HTML output -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
-
-html_theme = "sphinx_rtd_theme"
+#napoleon options
+napoleon_numpy_docstring = False
+napoleon_google_docstring = True
+napoleon_use_param = True
+napoleon_use_rtype = True
+napoleon_type_aliases  = True

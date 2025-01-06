@@ -4,96 +4,123 @@ Common helper functions for modelling.
 
 import os
 import numpy as np
-from sklearn.model_selection import KFold
+import itertools
 from sklearn.linear_model import RidgeCV, LinearRegression
 import matplotlib.pyplot as plt
-from mne.decoding import BaseEstimator
-from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
-from ..viz import get_spatial_colors
-from scipy import linalg
-from scipy.stats import spearmanr
 import mne
-import itertools
-from time import time as chrono
+from scipy import linalg
+from scipy.stats import spearmanr, pearsonr
 from scipy.linalg import sqrtm
-from scipy.stats import pearsonr
 from scipy.signal.windows import get_window
-from scipy.stats import pearsonr
 from scipy.fft import fft, ifft
-from scipy.signal import fftconvolve, welch
-from scipy.signal import csd as welch_csd
+from scipy.signal import csd as welch_csd, fftconvolve, welch
+from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
 
 
 def _get_covmat(x, y):
-    '''
+    """
     Helper function for computing auto-correlation / covariance matrices.
-    '''
+    """
     return np.dot(x.T, y)
 
 
 def _corr_multifeat(yhat, ytrue, nchans):
-    '''
+    """
     Helper functions for computing correlation coefficient (Pearson's r) for multiple channels at once.
+    
     Parameters
     ----------
-    yhat : ndarray (T x nchan), estimate
-    ytrue : ndarray (T x nchan), reference
-    nchans : number of channels
+    yhat : ndarray
+        estimate, of shape (T x nchan)
+    ytrue : ndarray
+        reference, of shape (T x nchan)
+    nchans : int
+        number of channels.
+    
     Returns
-    -------
-    corr_coeffs : 1-D vector (nchan), correlation coefficient for each channel
-    '''
+    ----------
+    corr_coeffs : ndarray
+        1-D vector correlation coefficient for each channel, of shape (nchans).
+    """
     return np.diag(np.corrcoef(x=yhat, y=ytrue, rowvar=False), k=nchans)
 
 
 def _rankcorr_multifeat(yhat, ytrue, nchans):
-    '''
+    """
     Helper functions for computing rank correlation coefficient (Spearman's r) for multiple channels at once.
+    
     Parameters
     ----------
-    yhat : ndarray (T x nchan), estimate
-    ytrue : ndarray (T x nchan), reference
-    nchans : number of channels
+    yhat : ndarray
+        estimate, of shape (T x nchan)
+    ytrue : ndarray
+        reference, of shape (T x nchan)
+    nchans : int
+        number of channels.
+    
     Returns
-    -------
-    corr_coeffs : 1-D vector (nchan), correlation coefficient for each channel
-    '''
+    ----------
+    corr_coeffs : ndarray
+        1-D vector correlation coefficient for each channel, of shape (nchans).
+    """
     return np.diag(spearmanr(yhat, ytrue)[0], k=nchans)
 
 
 
 def _rmse_multifeat(yhat, ytrue, axis=0):
-    '''
+    """
     Helper functions for computing RMSE for multiple channels at once.
+    
     Parameters
     ----------
-    yhat : ndarray (T x nchan), estimate
-    ytrue : ndarray (T x nchan), reference
-    axis : axis to compute the RMSE along
+    yhat : ndarray
+        estimate, of shape (T x nchan)
+    ytrue : ndarray
+        reference, of shape (T x nchan)
+    axis : int
+        axis to compute the RMSE along
+    
     Returns
-    -------
-    rmses : 1-D vector (nchan), RMSE for each channel
-    '''
+    ----------
+    rmses : ndarray
+        1-D vector, RMSE for each channel, of shape (nchan)
+    """
     return np.sqrt(np.mean((yhat-ytrue)**2, axis))
+    
 
 def _r2_multifeat(yhat, ytrue, axis=0):
-    '''
+    """
     Helper function for computing the coefficient of determination (R²) for multiple channels at once.
+    
     Parameters
     ----------
     yhat : ndarray (T x nchan), estimate
     ytrue : ndarray (T x nchan), reference
     axis : axis along which to compute the R²
+    
     Returns
     -------
     r2_scores : 1-D vector (nchan), R² for each channel
-    '''
+    """
     ss_res = np.sum((ytrue - yhat) ** 2, axis=axis)  # Sum of squares of residuals
     ss_tot = np.sum((ytrue - np.mean(ytrue, axis=axis)) ** 2, axis=axis)  # Total sum of squares
     r2_scores = 1 - (ss_res / ss_tot)  # R² score for each channel
     return r2_scores
 
 def _ezr2_multifeat(yhat, ytrue, Xtest, window_length, from_cov = False, axis = 0):
+    """
+    Helper function for computing Ezekiel correction for the coefficient of determination (R²) for multiple channels at once.
+    
+    Parameters
+    ----------
+    yhat : ndarray (T x nchan), estimate
+    ytrue : ndarray (T x nchan), reference
+    axis : axis along which to compute the R²
+    
+    Returns
+    -------
+    r2_adjusted : 1-D vector (nchan), R² for each channel
+    """
     ss_res = np.sum((ytrue - yhat) ** 2, axis=axis)  # Sum of squares of residuals
     ss_tot = np.sum((ytrue - np.mean(ytrue, axis=axis)) ** 2, axis=axis)  # Total sum of squares
     r2_scores = 1 - (ss_res / ss_tot)  # R² score for each channel
@@ -106,23 +133,33 @@ def _ezr2_multifeat(yhat, ytrue, Xtest, window_length, from_cov = False, axis = 
     
 
 def _adjr2_multifeat(yhat, ytrue, Xtrain, Xtest, alpha, lags, from_cov = False, axis = 0, drop = True):
-    '''
+    """
     Helper function for computing the adjusted coefficient of determination (R²) for multiple channels at once.
     from Lage et.al 2024, https://www.biorxiv.org/content/10.1101/2024.03.04.583270v1.full.pdf+html.
     Code repurposed from: https://github.com/mlsttin/adjustingR2
+    
     Parameters
     ----------
-    yhat : ndarray (T x nchan), estimate
-    ytrue : ndarray (T x nchan), reference
-    Xtrain: ndarray (T x nfeat), feat matrix of training data
-    Xtest: ndarray (T x nfeat), feat matrix of testing data
-    alpha: a single regularization parameter
-    lags: list of lags, generally provided in the TRF object
-    axis : axis along which to compute the R²
+    yhat : ndarray
+        Estimate array of shape (T x nchan).
+    ytrue : ndarray
+        Reference array of shape (T x nchan).        
+    Xtrain: ndarray
+        Feature matrix of training data, of shape (T x nfeat).
+    Xtest: ndarray, T x nfeat
+        Feature matrix of testing data, of shape (T x nfeat).
+    alpha: float
+        A single regularization parameter.
+    lags: list
+        A list of lags, generally provided in the TRF object.
+    axis : int
+        axis along which to compute the R²
+    
     Returns
     -------
-    adj_r2_scores : 1-D vector (nchan), R² for each channel
-    '''
+    adj_r2_scores : 1-D vector, nchan
+        R² for each channel
+    """
     ss_res = np.sum((ytrue - yhat) ** 2, axis=axis)  # Sum of squares of residuals
     ss_tot = np.sum((ytrue - np.mean(ytrue, axis=axis)) ** 2, axis=axis)  # Total sum of squares
     r2_scores = 1 - (ss_res / ss_tot)  # non-adjusted R² score for each channel
@@ -195,8 +232,10 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat 
 
     Parameters
     ----------
-    X : ndarray (nsamples x nfeats) or autocorrelation matrix XtX (nfeats x nfeats) (if from_cov == True)
-    y : ndarray (nsamples x nchans) or covariance matrix XtY (nfeats x nchans) (if from_cov == True)
+    X : ndarray (nsamples x nfeats) or autocorrelation matrix XtX (nfeats x nfeats) 
+        (if from_cov == True)
+    y : ndarray (nsamples x nchans) or covariance matrix XtY 
+        (nfeats x nchans) (if from_cov == True)
     alpha : array-like.
         Default: [0.].
         List of regularization parameters. Regularization is applied 
@@ -212,9 +251,6 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat 
     Returns
     -------
     model_coef : ndarray (model_feats* x alphas) *-specific shape depends on the model
-
-    TO DO:  - allows to input specific alpha matrices rather than computing all cominations.
-            - allow for different lag for different features
     '''
     # Compute covariance matrices
     if not from_cov:
@@ -290,8 +326,8 @@ def _fourier_fit(x, y, alpha=[0.], lags = [-1,1]):
     S_xy = X_fft[:, :, None] @ Y_fft[:, None, :].conjugate()
     S_xx = X_fft[:, :, None] @ X_fft[:, None, :].conjugate()
 
-    S_xy = resample_array(S_xy, total_lags*2)
-    S_xx = resample_array(S_xx, total_lags*2)
+    S_xy = _resample_array(S_xy, total_lags*2)
+    S_xx = _resample_array(S_xx, total_lags*2)
 
     window = get_window('boxcar', 2)
     S_xy = np.apply_along_axis(lambda m: fftconvolve(m, window, mode='same'), axis=0, arr=S_xy)
@@ -314,6 +350,9 @@ def _fourier_fit(x, y, alpha=[0.], lags = [-1,1]):
     return np.vstack(irf)
 
 def _b2b(t,X1,X2,Y1,Y2, alphax, alphay):
+    """
+    Back to back fitting.
+    """
     y1 = Y1[:,t,:]
     y2 = Y2[:,t,:]
 
@@ -375,7 +414,7 @@ def _covariance_fourier(x, start_lag, end_lag):
     Returns
     -------
     cov_X : numpy array of shape (n_channels * n_lags, n_channels * n_lags)
-        Covariance matrix for the lagged data across all channels.
+            Covariance matrix for the lagged data across all channels.
     """
     n_samples, n_channels = x.shape
     lags = np.arange(start_lag, end_lag)
@@ -442,15 +481,17 @@ def _inverse_square_root(m):
     return np.linalg.inv(sqrtm(m))
 
 
-def resample_array(array, new_length):
+def _resample_array(array, new_length):
     """
     Resamples an array to a fixed number of points using average pooling.
 
-    Parameters:
+    Parameters
+    ----------
         array (np.ndarray): The input array to resample. Can be 1D or multi-channel (e.g., 2D for multi-channel).
         new_length (int): The desired length of the output array.
 
-    Returns:
+    Returns
+    ----------
         np.ndarray: The resampled array.
     """
     if new_length <= 0:

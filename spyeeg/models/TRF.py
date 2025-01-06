@@ -284,7 +284,9 @@ class TRFEstimator(BaseEstimator):
         return self
 
     def fit_direct_cov(self, XXcov=None, XYcov=None, clear_after=True):
-
+        '''
+        Descriptor
+        '''
         self.XtX_ = XXcov
         self.XtY_ = XYcov
 
@@ -649,6 +651,9 @@ class TRFEstimator(BaseEstimator):
         return trf
 
     def get_best_alpha(self):
+        '''
+        Descriptor
+        '''
         best_alpha = np.zeros(self.n_chans_)
         for chan in range(self.n_chans_):
             if len(self.scores.shape) == 3:
@@ -660,6 +665,9 @@ class TRFEstimator(BaseEstimator):
 
     def plot_score(self, figax = None, figsize = (5,5), color_type = 'rainbow', 
                    channels = [], title = 'R2 sumary', minR2 = -np.inf):
+        '''
+        Descriptor
+        '''
         if figax == None:
             fig,ax = plt.subplots(figsize = figsize)
         else:

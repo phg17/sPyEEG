@@ -13,5 +13,5 @@ setuptools.setup(
     packages=setuptools.find_packages(),
     license='MIT',
     author='Pierre Guilleminot & Mikolaj Kegler',
-    description='Package for modelling EEG responses to speech.'
+    description='Package for modelling EEG responses to stimuli.'
 )
