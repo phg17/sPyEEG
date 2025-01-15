@@ -13,8 +13,7 @@ import numpy as np
 from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 from mne.decoding import BaseEstimator
-from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing, center_weight, count_significant_figures
-from ..viz import get_spatial_colors
+from ..utils import lag_matrix, mem_check
 from scipy import linalg
 import mne
 from numpy.random import randn
@@ -25,17 +24,19 @@ from scipy.linalg import pinv, svd, norm, svdvals
 from matplotlib import colormaps as cmaps
 from sklearn.preprocessing import scale
 
-MEM_CAP = 0.9  # Memory cap for the iRRR model (in GB)
+
+
+MEM_CAP = 0.9  # Memory cap for the TRF model (in GB)
 
 class ESNEstimator(BaseEstimator):
 
     def __init__(self, srate, alpha = [0], n_units = 500, sr = 0.9, lr = 0.5, 
                  scale_reservoir = False, percentile_units = 0, reservoir_mode = 'separate',
                  feedback = False):
-        '''
+        """
         Echo State Network, no initialization
         reservoir_mode : str ('separate', 'combine', 'all')
-        '''
+        """
         # General parameters
         self.srate = srate
         self.fitted = False
@@ -62,14 +63,18 @@ class ESNEstimator(BaseEstimator):
         if self.reservoir_mode == 'all':
             self.all_reservoir = Reservoir(n_units, lr=lr, sr=sr)
 
+
+    
     def run_reservoir(self, X):
-        '''
+        """
         Run the input data into the reservoir.
+        
+        Parameters
         ----------
         X : ndarray (T x nfeat)
         scale_reservoir : bool, whether to scale the output of the reservoir
         separate_features : bool, whether to run a separate reservoir on each feature. Careful, this increases the total number of units.
-        '''
+        """
         if self.reservoir_mode == 'separate':
             X_reservoir = np.zeros([X.shape[0], X.shape[1] * self.n_units])
             for i_feat in range(X.shape[1]):
@@ -92,18 +97,20 @@ class ESNEstimator(BaseEstimator):
         return X
 
     def get_XY(self, X, y):
-        '''
+        """
         Preprocess X and y before fitting (finding mapping between X -> y)
+        
         Parameters
         ----------
         X : ndarray (T x nfeat)
         y : ndarray (T x nchan)
+        
         Returns
         -------
         Features preprocessed for fitting the model.
         X : ndarray (T x n_units)
         y : ndarray (T x nchan)
-        '''
+        """
 
         X = np.asarray(X)
         y = np.asarray(y)
@@ -133,10 +140,12 @@ class ESNEstimator(BaseEstimator):
     def fit(self, X, y):
         """Fit the TRF model.
         Mapping X -> y. Note the convention of timelags and type of model for seamless recovery of coefficients.
+        
         Parameters
         ----------
         X : ndarray (nsamples x nfeats)
         y : ndarray (nsamples x nchans)
+        
         Returns
         -------
         coef_ : ndarray (alphas x nlags x nfeats)
@@ -152,13 +161,13 @@ class ESNEstimator(BaseEstimator):
         return self
 
     def get_coef(self):
-        '''
+        """
         Format and return coefficients. Note mtype attribute needs to be declared in the __init__.
 
         Returns
         -------
         coef_ : ndarray (n_units x nchans x regularization params)
-        '''
+        """
         if self.reservoir_mode == 'separate':
             n_in = self.n_units * self.n_feats_
         elif self.reservoir_mode == 'combine':
@@ -173,10 +182,12 @@ class ESNEstimator(BaseEstimator):
 
     def predict(self, X):
         """Compute output based on fitted coefficients and feature matrix X.
+        
         Parameters
         ----------
         X : ndarray
             Matrix of features
+            
         Returns
         -------
         ndarray
@@ -197,6 +208,7 @@ class ESNEstimator(BaseEstimator):
 
     def score(self, Xtest, ytrue, Xtrain = None, scoring="R2"):
         """Compute a score of the model given true target and estimated target from Xtest.
+
         Parameters
         ----------
         Xtest : ndarray
@@ -205,6 +217,7 @@ class ESNEstimator(BaseEstimator):
             True target
         scoring : str (or func in future?)
             Scoring function to be used ("corr", "rmse", "R2")
+            
         Returns
         -------
         float
@@ -242,8 +255,9 @@ class ESNEstimator(BaseEstimator):
                 "Only correlation & RMSE scores are valid for now...")
 
     def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="R2", segment_length=None, fit_mode='direct', verbose=True):
-        '''
+        """
         Standard cross-validation. Scoring
+        
         Parameters
         ----------
         X : ndarray (nsamples x nfeats)
@@ -270,13 +284,14 @@ class ESNEstimator(BaseEstimator):
             'xxx' portion of the string indicates the lenght of the segments that the data will be chopped into. 
             If not declared (i.e. 'from_cov') the default 2.5 minutes will be used.
         verbose : bool (defaul: True)
+        
         Returns
         -------
         scores - ndarray (n_splits x segments x nchans x alpha)
         ToDo:
         - implement standard scaler / normalizer (optional)
         - handle different scores
-        '''
+        """
 
         if np.ndim(self.alpha) < 1 or len(self.alpha) <= 1:
             raise ValueError(
@@ -309,6 +324,7 @@ class ESNEstimator(BaseEstimator):
         return scores
 
     def get_best_alpha(self):
+        """Get Best Alpha"""
         best_alpha = np.zeros(self.n_chans_)
         for chan in range(self.n_chans_):
             if len(self.scores.shape) == 3:
@@ -320,6 +336,7 @@ class ESNEstimator(BaseEstimator):
 
     def plot_score(self, figax = None, figsize = (5,5), color_type = 'rainbow', 
                    channels = [], title = 'R2 sumary', minR2 = -np.inf):
+        """Plot Scores"""
         if figax == None:
             fig,ax = plt.subplots(figsize = figsize)
         else:
@@ -347,6 +364,7 @@ class ESNEstimator(BaseEstimator):
         return fig, ax
 
     def __repr__(self):
+        """decorator"""
         obj = """TRFEstimator(
             alpha=%s,
             srate=%s,

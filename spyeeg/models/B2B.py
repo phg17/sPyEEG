@@ -39,7 +39,7 @@ These values are beta coefficients, and should not be interpreted as explained v
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from ..utils import lag_span, lag_sparse, get_timing
+from ..utils import lag_span, lag_sparse
 import mne
 from matplotlib import colormaps as cmaps
 from sklearn.preprocessing import scale

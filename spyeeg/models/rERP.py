@@ -5,7 +5,7 @@ Tool to do ERP regression.
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from ..utils import lag_span, lag_sparse, get_timing
+from ..utils import lag_span, lag_sparse
 import mne
 from matplotlib import colormaps as cmaps
 from sklearn.preprocessing import scale
@@ -13,7 +13,13 @@ from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multif
 from sklearn.model_selection import KFold
 
 class ERPEstimator():
+    '''
+    Descriptor
+    '''
     def __init__(self, tmin, tmax, srate, alpha = [0.]):
+        '''
+        Descriptor
+        '''
         self.srate = srate
         self.tmin = tmin
         self.tmax = tmax

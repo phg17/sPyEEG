@@ -20,7 +20,6 @@ from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 from mne.decoding import BaseEstimator
 from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing, center_weight, count_significant_figures
-from ..viz import get_spatial_colors
 from scipy import linalg
 import mne
 from numpy.random import randn

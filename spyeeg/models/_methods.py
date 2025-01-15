@@ -20,6 +20,15 @@ from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
 def _get_covmat(x, y):
     """
     Helper function for computing auto-correlation / covariance matrices.
+
+    Parameters
+    ----------
+    x : ndarray
+    y : ndarray
+
+    Returns
+    ----------
+    covmat : covariance matrix
     """
     return np.dot(x.T, y)
 
@@ -40,7 +49,7 @@ def _corr_multifeat(yhat, ytrue, nchans):
     Returns
     ----------
     corr_coeffs : ndarray
-        1-D vector correlation coefficient for each channel, of shape (nchans).
+        1-D vector correlation coefficient for each channel, of shape (nchans,).
     """
     return np.diag(np.corrcoef(x=yhat, y=ytrue, rowvar=False), k=nchans)
 
@@ -83,7 +92,7 @@ def _rmse_multifeat(yhat, ytrue, axis=0):
     Returns
     ----------
     rmses : ndarray
-        1-D vector, RMSE for each channel, of shape (nchan)
+        1-D vector, RMSE for each channel, of shape (nchan,)
     """
     return np.sqrt(np.mean((yhat-ytrue)**2, axis))
     
@@ -94,13 +103,17 @@ def _r2_multifeat(yhat, ytrue, axis=0):
     
     Parameters
     ----------
-    yhat : ndarray (T x nchan), estimate
-    ytrue : ndarray (T x nchan), reference
-    axis : axis along which to compute the R²
+    yhat : ndarray
+        estimate, of shape (T x nchan)
+    ytrue : ndarray
+        reference, of shape (T x nchan)
+    axis : int
+        axis to compute the RMSE along
     
     Returns
-    -------
-    r2_scores : 1-D vector (nchan), R² for each channel
+    ----------
+    r2_scores : ndarray
+        1-D vector of R² for each channel, of shape (nchan,)
     """
     ss_res = np.sum((ytrue - yhat) ** 2, axis=axis)  # Sum of squares of residuals
     ss_tot = np.sum((ytrue - np.mean(ytrue, axis=axis)) ** 2, axis=axis)  # Total sum of squares
@@ -113,13 +126,17 @@ def _ezr2_multifeat(yhat, ytrue, Xtest, window_length, from_cov = False, axis = 
     
     Parameters
     ----------
-    yhat : ndarray (T x nchan), estimate
-    ytrue : ndarray (T x nchan), reference
-    axis : axis along which to compute the R²
+    yhat : ndarray
+        estimate, of shape (T x nchan)
+    ytrue : ndarray
+        reference, of shape (T x nchan)
+    axis : int
+        axis to compute the RMSE along
     
     Returns
-    -------
-    r2_adjusted : 1-D vector (nchan), R² for each channel
+    ----------
+    r2_scores : ndarray
+        1-D vector of Ezekiel corrected R² for each channel, of shape (nchan,)
     """
     ss_res = np.sum((ytrue - yhat) ** 2, axis=axis)  # Sum of squares of residuals
     ss_tot = np.sum((ytrue - np.mean(ytrue, axis=axis)) ** 2, axis=axis)  # Total sum of squares
@@ -157,8 +174,8 @@ def _adjr2_multifeat(yhat, ytrue, Xtrain, Xtest, alpha, lags, from_cov = False, 
     
     Returns
     -------
-    adj_r2_scores : 1-D vector, nchan
-        R² for each channel
+    adj_r2_scores : ndarray
+        1-D vector of corrected R² for each channel, of shape (nchan,)
     """
     ss_res = np.sum((ytrue - yhat) ** 2, axis=axis)  # Sum of squares of residuals
     ss_tot = np.sum((ytrue - np.mean(ytrue, axis=axis)) ** 2, axis=axis)  # Total sum of squares
@@ -207,19 +224,21 @@ def _adjr2_multifeat(yhat, ytrue, Xtrain, Xtest, alpha, lags, from_cov = False, 
     return adj_r2
 
 def _pairwise_corr(X, Y):
-
-    '''
+    """
     Function for computing the pairwise correlations between the columns of two matrices X and Y
 
     Parameters
     ----------
-    X: numpy array of shape (n_samples, n_features)
-    Y: numpy array of shape (n_samples, n_features)
+    X: ndarray
+        estimate array of shape (T x nfeat)
+    Y: ndarray
+        reference array of shape (T x nfeat)
 
     Returns
     -------
-    correlations: numpy array of shape (n_features,)
-    '''
+    correlations: ndarray 
+        1D vector of correlation, of shape (n_features,)
+    """
     
     return np.array([pearsonr(X.real[:, i], Y.real[:, i])[0] for i in range(X.shape[1])])
 
@@ -227,30 +246,27 @@ def _pairwise_corr(X, Y):
 def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat = 1):
     '''
     SVD-inspired fast implementation of the SVD fitting.
-    Note: When fitting the intercept, it's also penalized!
-          If on doesn't want that, simply use average for each channel of y to estimate intercept.
 
     Parameters
     ----------
-    X : ndarray (nsamples x nfeats) or autocorrelation matrix XtX (nfeats x nfeats) 
-        (if from_cov == True)
-    y : ndarray (nsamples x nchans) or covariance matrix XtY 
-        (nfeats x nchans) (if from_cov == True)
-    alpha : array-like.
-        Default: [0.].
-        List of regularization parameters. Regularization is applied 
-        If 1D -> range of regularization params for the model (same reg. for all coeffs.)
+    x : ndarray
+        - if from_cov == False (default): Feature matrix X (nsamples x nfeats) 
+        - if from_cov == True: Autocorrelation matrix XtX (nfeats x nfeats) 
+    y : ndarray 
+        - if from_cov == False (default): Target matrix Y (nsamples x nchans) 
+        - if from_cov == True: Covariance matrix XtY (nfeats x nchans) 
+    alpha : array-like
+        Default: [0.] i.e. no regularization
+        List of regularization parameters. 
     from_cov : bool
-        Default: False.
         Use covariance matrices XtX & XtY instead of raw x, y arrays.
     alpha_feat : bool
-        Default: False.
-        If True, regularization is applied per feature. In this case, alpha is being re-written as
-        all the possible combinations of alpha. This exponentianates computation time, avoid if possible
-        or reduce to a minimum the possible combinations
+        If True, regularization is applied per feature. 
+        All possible combinations of alpha are tested, which exponentianates computation time, avoid in most cases.
     Returns
     -------
-    model_coef : ndarray (model_feats* x alphas) *-specific shape depends on the model
+    model_coef : ndarray 
+        Coefficients of the Ridge, specific shape depends on the model.
     '''
     # Compute covariance matrices
     if not from_cov:
@@ -311,7 +327,24 @@ def _ridge_fit_SVD(x, y, alpha=[0.], from_cov=False, alpha_feat = False, n_feat 
 
 def _fourier_fit(x, y, alpha=[0.], lags = [-1,1]):
     """
-    Estimate the IRF in the frequency domain using FFT (MIMO supported).
+    Estimate the IRF in the frequency domain using FFT.
+
+    Parameters
+    ----------
+    x : ndarray
+        Feature matrix x (nsamples x nfeats) 
+    y : ndarray 
+        Target matrix y (nsamples x nchans) 
+    alpha : array-like
+        Default: [0.] i.e. no regularization
+        List of regularization parameters. 
+    lags : array-like
+        Default: [-1,1]
+        List of lags to consider.
+    Returns
+    -------
+    model_coef : ndarray 
+        Coefficients of the Ridge, specific shape depends on the model.
     """
     n_samples, n_features = x.shape
     n_samples, n_outputs = y.shape
@@ -349,9 +382,15 @@ def _fourier_fit(x, y, alpha=[0.], lags = [-1,1]):
 
     return np.vstack(irf)
 
-def _b2b(t,X1,X2,Y1,Y2, alphax, alphay):
+def _b2b(t,X1,X2,Y1,Y2, alphax, alphay, Ridge2 = True):
     """
-    Back to back fitting.
+    Back to back regression fitting.
+
+    Parameters
+    ----------
+    t : int
+        sample index to consider
+    X1 : ndarray
     """
     y1 = Y1[:,t,:]
     y2 = Y2[:,t,:]

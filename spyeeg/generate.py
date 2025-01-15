@@ -1,7 +1,7 @@
 """
 Created on Thu Nov  14 18:32:12 2024
 
-@author: phg17
+@author: Pierre Guilleminot
 """
 
 import numpy as np
@@ -11,7 +11,7 @@ from sklearn.preprocessing import scale
 from scipy.signal import convolve
 from sklearn.preprocessing import MinMaxScaler, scale
 import colorednoise as cn
-from .preproc import scale_discrete
+from .preproc import scale_discrete, mix_signal_noise
 from mne.filter import filter_data
 
 
@@ -126,10 +126,10 @@ def simulate_channels(n_feat = 2, n_channels = 3,
         print("Weights have incoherent shape relative to number of features, set to equal weights")
     if len(weights_channel) == 0:
         weights_channel = np.ones(n_channels)
-    elif len(weights_feat) == n_feat:
-        weights_feat = np.asarray(weights_channels)
+    elif len(weights_channel) == n_channels:
+        weights_channel = np.asarray(weights_channel)
     else:
-        weights_feat = np.ones(n_channels)
+        weights_channel = np.ones(n_channels)
         print("Weights have incoherent shape relative to number of features, set to equal weights")
 
     #Set up arrays
@@ -275,35 +275,6 @@ def simulate_multisensory_channels(n_feat = 1, n_channels = 1,
     return time_array, X, Y1,Y2,Y12, events, impulse_responses
 
 
-def mix_signal_noise(signal, noise, snr_db):
-    """
-    Mix a signal and noise according to a specified signal-to-noise ratio (SNR).
-    
-    Parameters:
-        signal (np.ndarray): The time series representing the signal.
-        noise (np.ndarray): The time series representing the noise.
-        snr_db (float): The desired signal-to-noise ratio in decibels (dB).
-    
-    Returns:
-        mixed (np.ndarray): The resulting time series with the signal and noise mixed.
-    """
-    # Ensure signal and noise have the same length
-    if len(signal) != len(noise):
-        raise ValueError("Signal and noise must have the same length.")
-    
-    # Compute the power of the signal and noise
-    signal_power = np.mean(signal**2)
-    noise_power = np.mean(noise**2)
-    
-    # Compute the scaling factor for the noise based on the desired SNR
-    snr_linear = 10 ** (snr_db / 10)  # Convert SNR from dB to linear scale
-    scaling_factor = np.sqrt(signal_power / (noise_power * snr_linear))
-    
-    # Scale the noise and mix it with the signal
-    scaled_noise = noise * scaling_factor
-    mixed = signal + scaled_noise
-    
-    return mixed
 
 
 

@@ -6,8 +6,7 @@ import numpy as np
 from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 from mne.decoding import BaseEstimator
-from ..utils import lag_matrix, lag_span, lag_sparse, mem_check, get_timing
-from ..viz import get_spatial_colors
+from ..utils import lag_matrix, lag_span, lag_sparse, mem_check
 from scipy import linalg
 import mne
 from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat, _fourier_fit
@@ -695,7 +694,7 @@ class TRFEstimator(BaseEstimator):
 
         return fig, ax
 
-    def plot_kernel(self, figax = None, figsize = False, color_type = 'rainbow', center_line = True,
+    def plot_kernel(self, figax = None, figsize = False, color_type = 'rainbow', center_line = False,
                     channels = None, features = None, title = 'kernel sumary', minR2 = -np.inf):
         """Plot the TRF of the feature requested as a *butterfly* plot"""
         if not figsize:

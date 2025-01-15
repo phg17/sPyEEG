@@ -2,7 +2,10 @@ Utils
 ===
 
 .. autosummary::
-   :toctree: generated
+    :toctree: generated
 
-   spyeeg.generate
-   spyeeg.models._methods
+    spyeeg.feat
+    spyeeg.generate
+    spyeeg.preproc
+    spyeeg.utils
+    spyeeg.viz
