@@ -22,15 +22,23 @@ def simulate_continuous_stimuli(fs, time_array, mode = 'AR', phi = 1.1, noise_st
     Using the autocorrelation methods avoid having stimuli with strong periodicity, which typically creates
     artifacts when fitting the different models.
 
-    Parameters:
-        fs (int): The sampling frequency of the signal, in Hz.
-        time_array (ndarray): The different timesteps, typically a range from 0 to N-1 for N timepoints.
-        mode (str): Methods to generate the arbitrary stimuli. Must be either 'AR' or 'autocorrelation'.
-        phi (float): Autoregression coefficient.
-        noise_std: The standard deviation of the Gaussian noise used in the AR model.
+    Parameters
+    ----------
+    fs : int 
+        The sampling frequency of the signal, in Hz.
+    time_array : ndarray
+        The different timesteps, typically a range from 0 to N-1 for N timepoints.
+    mode : str
+        Methods to generate the arbitrary stimuli. Must be either 'AR' or 'autocorrelation'.
+    phi : float
+        Autoregression coefficient.
+    noise_std : float
+        The standard deviation of the Gaussian noise used in the AR model.
 
-    Returns:
-        y (ndarray): An arbitrary continuous stimuli.
+    Returns
+    -------
+    y : ndarray 
+        An arbitrary continuous stimuli.
     """
     if mode == 'convolution':
         #Generate a set of random periodic signals and then convolve them

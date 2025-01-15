@@ -1,5 +1,5 @@
 """
-Classic TRF, mainly from pyEEG
+Classic TRF.
 """
 
 import numpy as np
@@ -13,50 +13,43 @@ from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multif
 from matplotlib import colormaps as cmaps
 
 # Memory cap (i.e. max usage).
-# By default set to 90% to prevent bricking machines in corner cases...
+# By default set to 90% to prevent bricking machines in corner cases.
 MEM_CAP = 0.9
 
 
 class TRFEstimator(BaseEstimator):
+    """
+    This implements a TRF to relate a continuous stimuli and electrophysiological data. The model functions under the assumption that the signal behaves like a linear time invariant system i.e. its response is a linear function of the input, that does not change over time. It lags the input in time and combine each lag to reconstruct the electrophysiological signal using a Ridge regression. Since this operation is equivalent to a convolution in time, the TRF can alternatively be fitted in the Fourier domain as a multiplication.
+        
+    Parameters
+    ----------
+    times : tuple
+        mismatch a -> b, where a - dependent, b - predicted. Negative timelags indicate a lagging behind b. Positive timelags indicate b lagging behind a
+    tmin : float
+        Minimum time lag (in seconds). Can be negative to check for lags in the past (~null model).
+    tmax : float
+        Maximum time lag (in seconds). Can be large to check for lags in the future (~null model).
+    srate : float
+        Sampling rate of the data.
+    alpha : list
+        Regularization parameter(s) for the model. If a list is provided, the model will be fitted for each alpha.
+        The fit is looping over alpha AFTER most matrix operations to optimize compute time. Careful, we weight matrices according to the
+        eigenvalues and this value of alpha is not directly equivalent to the one given in (XtX + alpha*I)XtY. Ideally, alpha should be computed for many values.
+    fit_intercept : bool
+        Whether to fit an intercept term in the model.
+    mtype : str
+        'forward' or 'backward'. Required for formatting coefficients in get_coef (convention: forward - stimulus -> eeg, backward - eeg - stimulus)
+    alpha_feat : bool
+        Whether to compute alpha for each feature separately and fit them. If True, alpha will be modified to be a list of all possible combinations. This increases computation time exponentially, only use if dealing with few very different regressors, or to check differences are minimal.
+    fit_domain : str
+        'time' or 'frequency', whether to treat TRF fitting as a regression (fit in time via Ridge regression) or as a convolution (fit in frequency as a division). The time-fit is the usual method but the frequency-fit offers comparable performance while being generally less time and space consumming. 
+    """
 
     def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., alpha=[0.], 
                  fit_intercept=False, mtype='forward', alpha_feat = False, fit_domain = 'time'):
-        '''
-        This class implements the TRF model for s/M/EEG data.
-        times : mismatch a -> b, where a - dependent, b - predicted
-            Negative timelags indicate a lagging behind b
-            Positive timelags indicate b lagging behind a
-        tmin : float
-            Default: None
-            Minimum time lag (in seconds). Can be negative to check for lags in the past (~null model).
-        tmax : float
-            Default: None
-            Maximum time lag (in seconds). Can be large to check for lags in the future (~null model).
-        srate : float
-            Default: 1.
-            Sampling rate of the data.
-        alpha : list
-            Default: [0.]
-            Regularization parameter(s) for the model. If a list is provided, the model will be fitted for each alpha.
-            The fit is looping over alpha AFTER most matrix operations to optimize compute time. Careful, we weight matrices according to the
-            eigenvalues and this value of alpha is not directly equivalent to the one given in (XtX + alpha*I)XtY. Ideally, alpha should be computed for 
-            many values.
-        fit_intercept : bool
-            Default: False
-            Whether to fit an intercept term in the model.
-        mtype : str
-            Default: 'forward'
-            Forward or backward. Required for formatting coefficients in get_coef (convention: forward - stimulus -> eeg, backward - eeg - stimulus)
-        alpha_feat : bool
-            Default: False
-            Whether to compute alpha for each feature separately and fit them. If True, alpha will be modified to be a list of all possible combinations.
-            This increases computation time exponentially, only use if dealing with few very different regressors, or to check differences are minimal.
-
-        TODO:
-            - Implement a method to compute alpha from the data (e.g. nested cross-validation) directly in the function
-            - Give the possibility to compute alphas for each feature separately and fit them.
-        
-        '''
+        """
+        Initialize the class instance.
+        """
 
         self.tmin = tmin
         self.tmax = tmax
@@ -86,12 +79,8 @@ class TRFEstimator(BaseEstimator):
         self.scores = None
 
     def fill_lags(self):
-        """Fill the lags attributes, with number of samples and times in seconds.
-        Note
-        ----
-        Necessary to call this function if one wishes to use trf.lags _before_
-        :func:`trf.fit` is called.
-
+        """
+        Fill the lags attributes, with number of samples and times in seconds.
         """
         if (self.tmin != None) and (self.tmax != None):
             # LOGGER.info("Will use lags spanning form tmin to tmax.\nTo use individual lags, use the `times` argument...")
@@ -104,26 +93,28 @@ class TRFEstimator(BaseEstimator):
             self.lags = lag_sparse(self.times, self.srate)[::-1]
 
     def get_XY(self, X, y, lagged=False, drop=True, feat_names=()):
-        '''
-        Preprocess X and y before fitting (finding mapping between X -> y)
+        """
+        Preprocess X and y before fitting (finding mapping between X -> y).
+        
         Parameters
         ----------
-        X : ndarray (T x nfeat)
-        y : ndarray (T x nchan)
+        X : ndarray 
+            input, of shape (T, nfeat)
+        y : ndarray 
+            output, of shape (T, nchan)
         lagged : bool
-            Default: False.
-            Whether the X matrix has been previously 'lagged' (intercept still to be added).
+            Whether the X matrix has been previously 'lagged'.
         drop : bool
-            Default: True.
             Whether to drop non valid samples (if False, non valid sample are filled with 0.)
         feat_names : list
             Names of features being fitted. Must be of length ``nfeats``.
         Returns
         -------
-        Features preprocessed for fitting the model.
-        X : ndarray (T x nlags * nfeats)
-        y : ndarray (T x nchan)
-        '''
+        X : ndarray 
+            Preprocessed input, of shape (T, nlags * nfeats)
+        y : ndarray
+            Preprocessed output, of shape (T, nlags * nfeats)
+        """
         self.fill_lags()
 
         X = np.asarray(X)
@@ -173,24 +164,25 @@ class TRFEstimator(BaseEstimator):
         return X, y
 
     def fit(self, X, y, lagged=False, drop=True, feat_names=()):
-        """Fit the TRF model.
-        Mapping X -> y. Note the convention of timelags and type of model for seamless recovery of coefficients.
+        """
+        Fit the TRF model in either the time of frequency domain. The convention is to map X -> y. In order to properly retrieve the coefficients, respect the convention using the 'mtype' argument. This fills the coefficients attributes with shape (alphas, nlags, nfeats)
+        
         Parameters
         ----------
-        X : ndarray (nsamples x nfeats)
-        y : ndarray (nsamples x nchans)
+        X : ndarray 
+            input of shape (nsamples, nfeats)
+        y : ndarray
+            output of shape (nsamples, nfeats)
         lagged : bool
-            Default: False.
-            Whether the X matrix has been previously 'lagged' (intercept still to be added).
+            Whether the X matrix has been previously 'lagged'.
         drop : bool
-            Default: True.
             Whether to drop non valid samples (if False, non valid sample are filled with 0.)
         feat_names : list
             Names of features being fitted. Must be of length ``nfeats``.
         Returns
         -------
-        coef_ : ndarray (alphas x nlags x nfeats)
-        intercept_ : ndarray (nfeats x 1)
+        coef_ : ndarray 
+            coefficients of shape (alphas, nlags, nfeats)
         """
 
         if self.fit_domain == 'time':
@@ -205,7 +197,7 @@ class TRFEstimator(BaseEstimator):
             self.coef_ = _fourier_fit(X, y, self.alpha, self.lags)
         self.fitted = True
 
-        return self
+        return self.coef_.copy()
 
     def get_coef(self):
         '''

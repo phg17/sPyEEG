@@ -22,13 +22,11 @@ def _rgb(x, y, z):
     rgb /= np.maximum(rgb.max(0), 1e-16)  # avoid div by zero
     return rgb
 
-
-
 def colormap_masked(ncolors=256, knee_index=None, cmap='inferno', alpha=0.3):
     """
     Create a colormap with value below a threshold being greyed out and transparent.
 
-    Parameters:
+    Parameters
     ----------
     ncolors : int
         default to 256
@@ -37,7 +35,7 @@ def colormap_masked(ncolors=256, knee_index=None, cmap='inferno', alpha=0.3):
         e.g. knee_index = np.argmin(abs(np.linspace(0., 3.5, ncolors)+np.log10(0.05)))
 
     Returns
-    ----------
+    -------
     cm : LinearSegmentedColormap
         Colormap instance
     """
@@ -56,7 +54,7 @@ def plot_trf_signi(trf, reject, time_highlight=None, shades=None):
     """
     Plot trf with significant portions highlighted and with thicker lines.
     
-    Parameters:
+    Parameters
     ----------
     trf: class
         trf class object
@@ -69,8 +67,8 @@ def plot_trf_signi(trf, reject, time_highlight=None, shades=None):
         rgb values for highlights background
         if None, set to [.2, .2, .2] (light grey)
 
-    Returns:
-    ----------
+    Returns
+    -------
     fig: mpl Figure
     ax: mpl Axes or array of Axes
     """
@@ -111,7 +109,7 @@ def barplot_annotate_brackets(num1, num2, data, center, height, color='k', yerr=
     """ 
     Annotate barplot with p-values.
 
-    Parameters:
+    Parameters
     ----------
     num1: int
         Index of first column
@@ -137,7 +135,8 @@ def barplot_annotate_brackets(num1, num2, data, center, height, color='k', yerr=
     figax: tuple
         (fig, ax) of existing bar plot. If None, plot on the latest figure.
 
-    Returns:
+    Returns
+    -------
     None
     """
 

@@ -24,7 +24,7 @@ def audio_to_float(audio):
         sound (PCM int)
         
     Returns
-    ----------
+    -------
     audio: ndarray
         sound (PCM float)
     """
@@ -58,18 +58,18 @@ def lag_matrix(data, lag_samples=(-1, 0, 1), filling=np.nan, drop_missing=False)
         Whether to drop rows where filling occured.
 
     Returns
-    ----------
+    -------
     lagged : ndarray 
         Matrix of lagged time series, of shape (nsamples_new, nfeats*len(lag_samples))
 
     Raises
-    ----------
+    ------
     ValueError
         If ``filling`` is set by user and ``drop_missing`` is ``True`` (it should be one or
         the other, the error is raised to avoid this confusion by users).
 
     Example
-    ----------
+    -------
     >>> data = np.asarray([[1,2,3,4,5,6],[7,8,9,10,11,12]]).T
     >>> out = lag_matrix(data, (0,1))
     >>> out
@@ -114,7 +114,7 @@ def lag_span(tmin, tmax, srate=100):
         Sampling rate.
 
     Returns
-    ----------
+    -------
     lags : 1darray
         Array of lags in _samples_
 
@@ -176,12 +176,12 @@ def find_knee_point(x, y, tol=0.95, plot=False):
         Whether to plot the result
 
     Returns
-    ----------
+    -------
     float
         The x-value of the point of maximum curvature
 
     Notes
-    ----------
+    -----
     The function only works well on smooth curves.
     """
     y = np.asarray(y).copy()

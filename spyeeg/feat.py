@@ -11,7 +11,8 @@ import mne
 
 
 def signal_envelope(x, srate, cutoff=20., resample=None, method='hilbert', comp_factor=1., rescale=None, verbose=False, **fir_kwargs):
-    """Extraction of the signal envelope, with filtering and resampling.
+    """
+    Extraction of the signal envelope, with filtering and resampling.
     
     Parameters
     ----------
@@ -22,29 +23,26 @@ def signal_envelope(x, srate, cutoff=20., resample=None, method='hilbert', comp_
     cutoff : float | 2-element list-like
         Cutoff frequencies (in Hz). Defaults to 20.
     resample : float
-        Sampling rate of the resampled signal in Hz.
-        If None, no resampling. Defaults to None.
+        Sampling rate of the resampled signal in Hz. If None, no resampling. Defaults to None.
     method : str
-        Method for extracting the envelope. Options
-            - hilbert - hilbert transform + abs.
-            - rectify - full wave rectification.
-        Defaults to 'hilbert'.
+        Method for extracting the envelope, either 'hilbert' (hilbert transform + abs) or 'rectify' (full wave rectification). Defaults to 'hilbert'.
     comp_factor : float
         Compression factor of the envelope. Defaults to 1 (no compression).
     rescale : tuple of floats
         Mix-max rescale the signal to the given range.
         If None, no rescaling. Defaults to None.
-    fir_kwargs: 
+    fir_kwargs : misc
         arguments of the mne.filter.create_filter (https://mne.tools/dev/generated/mne.filter.create_filter.html)
 
     Raises
-    ----------
+    ------
     NotImplementedError: Envelope extractions methods to be implemented.
     ValueError: Bad format of the argument.
 
     Returns
-    ----------
-    env [nd array]: Filtered & resampled signal envelope.
+    -------
+    env : ndarray
+        Filtered & resampled signal envelope.
     """
 
     if method.lower() == 'subs':
@@ -79,14 +77,11 @@ def signal_rectify(signal, mode='half'):
     signal : ndarray
         Signal to be rectified.
     mode : str
-    Rectification mode. Options
-        - half - half wave rectification
-        - full - full wave rectification
-        Defaults to 'half'.
+        Rectification mode, either 'hilbert' (hilbert transform + abs) or 'rectify' (full wave rectification). Defaults to 'hilbert'. Defaults to 'half'.
         
     Returns
-    ----------
-    tmp: ndarray
+    -------
+    tmp : ndarray
         Rectified signal.
     """
     if mode == 'full':

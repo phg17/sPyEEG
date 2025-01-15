@@ -39,7 +39,7 @@ def mix_signal_noise(signal, noise, snr_db):
         The desired signal-to-noise ratio in decibels (dB).
     
     Returns
-    ----------
+    -------
     mixed: np.ndarray
         The resulting time series with the signal and noise mixed.
     """
