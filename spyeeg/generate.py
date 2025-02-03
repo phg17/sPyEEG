@@ -75,7 +75,8 @@ def simulate_channels(n_feat = 2, n_channels = 3,
                       impulse_freqs = [0.1,10], decreasing_rates = [0.1,20], delays = [0.06,0.2], 
                       filter_impulse = False, filter_val = [0.01,20],
                       share_impulse = False,
-                      random_seed = 0, scale_data = True):
+                      random_seed = 0, scale_data = True,
+                      manual_events = None):
     """
     Simulate M/sE/EEG channels as the combination of responses to arbitrary features and noise. 
     This supposedly models a linear time invariant system, considering noise as every process other than 
@@ -149,20 +150,23 @@ def simulate_channels(n_feat = 2, n_channels = 3,
     response = np.zeros([n_channels,n_samples])
 
     #Generate features i.e. stimuli
-    if stim_type == 'discrete':
-        if share_events:
-            event_pulses = np.random.randint(0,n_samples,n_pulse)
+    if manual_events == None:
+        if stim_type == 'discrete':
+            if share_events:
+                event_pulses = np.random.randint(0,n_samples,n_pulse)
+                for i_feat in range(n_feat):
+                    events[i_feat,event_pulses] = np.random.random(n_pulse)
+            else:
+                for i_feat in range(n_feat):
+                    events[i_feat,np.random.randint(0,n_samples,n_pulse)] = np.random.random(n_pulse)
+        elif stim_type == 'continuous':
             for i_feat in range(n_feat):
-                events[i_feat,event_pulses] = np.random.random(n_pulse)
+                y = simulate_continuous_stimuli(fs, time_array)
+                events[i_feat,:] = MinMaxScaler(feature_range=(-1,1)).fit_transform(y.reshape(-1, 1)).reshape(-1)
         else:
-            for i_feat in range(n_feat):
-                events[i_feat,np.random.randint(0,n_samples,n_pulse)] = np.random.random(n_pulse)
-    elif stim_type == 'continuous':
-        for i_feat in range(n_feat):
-            y = simulate_continuous_stimuli(fs, time_array)
-            events[i_feat,:] = MinMaxScaler(feature_range=(-1,1)).fit_transform(y.reshape(-1, 1)).reshape(-1)
+            raise ValueError(f"Invalid value for 'stim_type': {stim_type}. Must be one of discrete or continuous.")
     else:
-        raise ValueError(f"Invalid value for 'stim_type': {stim_type}. Must be one of discrete or continuous.")
+        events = manual_events
 
     #Generate Impulse Response
     for i_feat in range(n_feat):

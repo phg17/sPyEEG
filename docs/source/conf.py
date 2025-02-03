@@ -93,3 +93,5 @@ napoleon_google_docstring = True
 napoleon_use_param = True
 napoleon_use_rtype = True
 napoleon_type_aliases  = True
+
+numpydoc_show_class_members = False 

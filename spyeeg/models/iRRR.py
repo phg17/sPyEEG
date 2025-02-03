@@ -11,7 +11,9 @@ ISSN 0378-5955,
 https://doi.org/10.1016/j.heares.2023.108838.
 (https://www.sciencedirect.com/science/article/pii/S0378595523001508)
 
-We changed the format to make it consistent with the SpyEEG library and refactored the code, but the computations are identical to the original library found above.
+We changed the format to make it consistent with the SpyEEG library and refactored the code, but the computations are identical to the original library found above. 
+
+For a more efficient version using GPU, please see https://github.com/realwsq/brainwide-RRR-encoding-model/blob/main/RRRGD_main_CV.py
 """
 
 

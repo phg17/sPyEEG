@@ -223,5 +223,33 @@ def mem_check(units='Gb'):
 
 def get_timing(spikes):
     "Return timing of spikes"
-    return np.asarray([[i, spike] for i, spike in enumerate(spikes) if spike > 0]).T
+    return np.asarray([[i, spike] for i, spike in enumerate(spikes) if spike != 0]).T
+
+def center_weight(X,weight):
+    """
+    Center and weight the data
+    Args:
+        X (list): list of numpy arrays
+        weights (list): list 
+    """
+    meanX = [Xk.mean(0,keepdims=True) for Xk in  X]
+    X = [(Xk-mx)/w for Xk,mx,w in zip(X,meanX,weight)]
+    return X, meanX
+
+def count_significant_figures(num):
+    if num == 0:
+        return 0
+    s = f"{num:.15g}"  # Convert the number to a string using general format with precision
+    if 'e' in s:  # Handle scientific notation
+        s = f"{float(s):f}"  # Convert back to float and then to normal fixed-point notation
+    # Remove leading zeros and decimal points
+    s = s.strip("0").replace(".", "")
+    return len(s)
+
+
+
+
+
+
+
 

@@ -108,6 +108,7 @@ class TRFEstimator(BaseEstimator):
             Whether to drop non valid samples (if False, non valid sample are filled with 0.)
         feat_names : list
             Names of features being fitted. Must be of length ``nfeats``.
+            
         Returns
         -------
         X : ndarray 
@@ -170,15 +171,16 @@ class TRFEstimator(BaseEstimator):
         Parameters
         ----------
         X : ndarray 
-            input of shape (nsamples, nfeats)
+            input of shape (T, nfeats)
         y : ndarray
-            output of shape (nsamples, nfeats)
+            output of shape (T, nfeats)
         lagged : bool
             Whether the X matrix has been previously 'lagged'.
         drop : bool
             Whether to drop non valid samples (if False, non valid sample are filled with 0.)
         feat_names : list
             Names of features being fitted. Must be of length ``nfeats``.
+            
         Returns
         -------
         coef_ : ndarray 
@@ -200,13 +202,13 @@ class TRFEstimator(BaseEstimator):
         return self.coef_.copy()
 
     def get_coef(self):
-        '''
+        """
         Format and return coefficients. Note mtype attribute needs to be declared in the __init__.
 
         Returns
         -------
         coef_ : ndarray (nlags x nfeats x nchans x regularization params)
-        '''
+        """
         if np.ndim(self.alpha) == 0:
             betas = np.reshape(self.coef_, (len(self.lags),
                                             self.n_feats_, self.n_chans_))
@@ -223,26 +225,23 @@ class TRFEstimator(BaseEstimator):
         return betas
 
     def add_cov(self, X, y, lagged=False, drop=True, n_parts=1):
-        '''
-        Compute and add (with normalization factor) covariance matrices XtX, XtY
+        """
+        Compute and add (with normalization factor) covariance matrices XtX, XtY.
         For v. large population models when it's not possible to load all the data to memory at once.
+        
         Parameters
         ----------
-        X : ndarray (nsamples x nfeats) or list/tuple of ndarray (from which the model will be computed)
-        y : ndarray (nsamples x nchans) or list/tuple of ndarray (from which the model will be computed)
+        X : ndarray 
+            input of shape (T, nfeats)
+        y : ndarray 
+            output of shape (T, nchans)
         lagged : bool
-            Default: False.
             Whether the X matrix has been previously 'lagged' (intercept still to be added).
         drop : bool
-            Default: True.
             Whether to drop non valid samples (if False, non valid sample are filled with 0.)
         n_parts : number of parts from which the covariance matrix are computed (required for normalization)
             Default: 1
-        Returns
-        -------
-        XtX : autocorrelation matrix for X (accumulated)
-        XtY : covariance matrix for X & Y (accumulated)
-        '''
+        """
         if isinstance(X, (list, tuple)) and n_parts > 1:
 
             assert len(X) == len(y)
@@ -275,9 +274,19 @@ class TRFEstimator(BaseEstimator):
         return self
 
     def fit_direct_cov(self, XXcov=None, XYcov=None, clear_after=True):
-        '''
-        Descriptor
-        '''
+        """
+        Directly fit the TRF by manually giving the preprocessed covariance matrices. This automatically uses the time domain fit as it uses the lagged covariance matrices. Mostly useful to work with specific data shape to test scenarios.
+        
+        Parameters
+        ----------
+        XXcov : ndarray
+            Covariance matrix of the input, should be lagged beforehand.
+        XYcov : ndarray
+            Covariance matrix and X and Y
+        clear_after : bool
+            whether to keep in memory the variables, default to True
+        
+        """
         self.XtX_ = XXcov
         self.XtY_ = XYcov
 
@@ -293,34 +302,28 @@ class TRFEstimator(BaseEstimator):
         return self
 
     def fit_from_cov(self, X=None, y=None, lagged=False, drop=True, overwrite=True, part_length=150., clear_after=True):
-        '''
-        Fit model from covariance matrices (handy for v. large data).
-        Note: This method is intercept-agnostic. It's recommended to standardize the input data and avoid fitting intercept in the first place.
-        Otherwise, the intercept can be estimated as mean values for each channel of y.
+        """
+        Fit model from covariance matrices, handy for very large data, but slower.
+        
         Parameters
         ----------
-        X : ndarray (nsamples x nfeats), if None, model will be fitted from accumulated XtX & XtY
-            Default: None
-        y : ndarray (nsamples x nchans), if None, model will be fitted from accumulated XtX & XtY
-            Default: None
+        X : ndarray 
+            if None, model will be fitted from accumulated XtX & XtY, for size otherwise (T x nfeats).
+        y : ndarray (T x nchans), if None, model will be fitted from accumulated XtX & XtY
+            if None, model will be fitted from accumulated XtX & XtY, for size otherwise (T x nfeats).
         lagged : bool
-            Default: False.
-            Whether the X matrix has been previously 'lagged' (intercept still to be added).
+            Whether the X matrix has been previously 'lagged'.
         drop : bool
-            Default: True.
             Whether to drop non valid samples (if False, non valid sample are filled with 0.)
         overwrite : bool
-            Default: True
             Whether to reset the accumulated covariance matrices (when X and Y are not None)
         part_length : integer | float
-            Default: 150 (seconds) ~ 2.5 minutes. Estimate what will fit in RAM.
-            Size of the parts in which the data will be chopped for fitting the model (when X and Y are provided).
+            Size of the parts in which the data will be chopped for fitting the model (when X and Y are provided), Default to 150 (seconds) ~ 2.5 minutes. Estimate what will fit in RAM.
+            
         Returns
         -------
         coef_ : ndarray (alphas x nlags x nfeats)
-        TODO:
-        - Introduce overlap between the segments to prevent losing data (minor, but it should yield exact results)
-        '''
+        """
 
         # If X and y are not none, chop them into pieces, compute cov matrices and fit the model (memory efficient)
         if (X is not None) and (y is not None):
@@ -361,30 +364,29 @@ class TRFEstimator(BaseEstimator):
         return self
 
     def clear_cov(self):
-        '''
+        """
         Wipe clean / reset covariance matrices.
-        '''
+        """
         # print("Clearing saved covariance matrices...")
         self.XtX_ = None
         self.XtY_ = None
         return self
 
     def predict(self, X):
-        """Compute output based on fitted coefficients and feature matrix X.
+        """
+        Compute output based on fitted coefficients and feature matrix X.
+        
         Parameters
         ----------
         X : ndarray
             Matrix of features (can be already lagged or not).
+            
         Returns
         -------
         ndarray
             Reconstruction of target with current beta estimates
-        Notes
-        -----
-        If the matrix onky has features in its column (not yet lagged), the lagged version
-        of the feature matrix will be created on the fly (this might take some time if the matrix
-        is large).
         """
+        
         assert self.fitted, "Fit model first!"
 
         if self.fit_intercept:
@@ -406,20 +408,23 @@ class TRFEstimator(BaseEstimator):
 
         return pred  # Shape T x Nchan x Alpha
 
+        
     def score(self, Xtest, ytrue, Xtrain = None, scoring="R2"):
         """Compute a score of the model given true target and estimated target from Xtest.
+        
         Parameters
         ----------
         Xtest : ndarray
             Array used to get "yhat" estimate from model
         ytrue : ndarray
             True target
-        scoring : str (or func in future?)
-            Scoring function to be used ("corr", "rmse", "R2")
+        scoring : str
+            Scoring function to be used ("corr", "rankcorr", "rmse", "R2", "ezekiel", 'adj_R2')
+            
         Returns
         -------
-        float
-            Score value computed on whole segment.
+        scores: ndarray
+            Scores computed on whole segment.
         """
         yhat = self.predict(Xtest)
         window_length = self.times.shape[0]
@@ -458,41 +463,36 @@ class TRFEstimator(BaseEstimator):
                 "Only correlation & RMSE scores are valid for now...")
 
     def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="R2", segment_length=None, fit_mode='direct', verbose=True):
-        '''
-        Standard cross-validation. Scoring
+        """
+        Standard cross-validation. Scoring. 
+        
         Parameters
         ----------
-        X : ndarray (nsamples x nfeats)
-        y : ndarray (nsamples x nchans)
-        n_splits : integer (default: 5)
-            Number of folds
+        X : ndarray 
+            input of size (T x nfeats)
+        y : ndarray 
+            output of size (T x nchans)
+        n_splits : integer 
+            Number of folds, default to 5.
         lagged : bool
-            Default: False.
-            Whether the X matrix has been previously 'lagged' (intercept still to be added).
+            Whether the X matrix has been previously 'lagged', default to False.
         drop : bool
-            Default: True.
-            Whether to drop non valid samples (if False, non valid sample are filled with 0.)
-        train_full : bool (default: True)
+            Whether to drop non valid samples (if False, non valid sample are filled with 0.).
+        train_full : bool 
             Train model using all the available data after the end of x-val
-        scoring : string (default: "corr")
-            Scoring method (see scoring())
-        segment_length: integer, float (default: None)
-            Length of a testing segments (that testing data will be chopped into). If None, use all the available data.
+        scoring : string
+            Scoring method (see scoring()), default to "R2".
+        segment_length: integer, float 
+            Length of a testing segments (that testing data will be chopped into). If None, use all the available data. Default to None.
         fit_mode : string {'direct' | 'from_cov_xxx'} (default: 'direct')
-            Model training mode. Options:
-            'direct' - fit using all the avaiable data at once (i.e. fit())
-            'from_cov_xxx' - fit using all the avaiable data from covariance matrices. 
-            The routine will chop data into pieces, compute piece-wise cov matrices and fit the model.
-            'xxx' portion of the string indicates the lenght of the segments that the data will be chopped into. 
-            If not declared (i.e. 'from_cov') the default 2.5 minutes will be used.
-        verbose : bool (defaul: True)
+            Model training mode. 'direct' - fit using all the avaiable data at once (i.e. fit()), 'from_cov_xxx' - fit using all the avaiable data from covariance matrices. The routine will chop data into pieces, compute piece-wise cov matrices and fit the model. 'xxx' portion of the string indicates the lenght of the segments that the data will be chopped into. 
+        verbose : bool
+        
         Returns
         -------
-        scores - ndarray (n_splits x segments x nchans x alpha)
-        ToDo:
-        - implement standard scaler / normalizer (optional)
-        - handle different scores
-        '''
+        scores : ndarray 
+            scores across each fold (n_splits x segments x nchans x alpha)
+        """
 
         #if np.ndim(self.alpha) < 1 or len(self.alpha) <= 1:
         #    raise ValueError(
@@ -571,7 +571,7 @@ class TRFEstimator(BaseEstimator):
         return scores
 
     def __getitem__(self, feats):
-        "Extract a sub-part of TRF instance as a new TRF instance (useful for plotting only some features...)"
+        """Extract a sub-part of TRF instance as a new TRF instance (useful for plotting only some features...)"""
         # Argument check
         if self.feat_names_ is None:
             if np.ndim(feats) > 0:
@@ -608,22 +608,6 @@ class TRFEstimator(BaseEstimator):
 
         return trf
 
-    def __repr__(self):
-        obj = """TRFEstimator(
-            alpha=%s,
-            fit_intercept=%s,
-            srate=%s,
-            tmin=%s,
-            tmax=%s,
-            n_feats=%s,
-            n_chans=%s,
-            n_lags=%s,
-            features : %s
-        )
-        """ % (self.alpha, self.fit_intercept, self.srate, self.tmin, self.tmax,
-               self.n_feats_, self.n_chans_, len(self.lags) if self.lags is not None else None, str(self.feat_names_))
-        return obj
-
     def __add__(self, other_trf):
         "Make available the '+' operator. Will simply add coefficients. Be mindful of dividing by the number of elements later if you want the true mean."
         assert (other_trf.n_feats_ == self.n_feats_ and other_trf.n_chans_ ==
@@ -642,23 +626,51 @@ class TRFEstimator(BaseEstimator):
         return trf
 
     def get_best_alpha(self):
-        '''
-        Descriptor
-        '''
+        """
+        Return the best regularization parameters over the cross-fold evaluation
+
+        Returns
+        -------
+        alphas : ndarray
+            Best alpha per channel
+        """
         best_alpha = np.zeros(self.n_chans_)
         for chan in range(self.n_chans_):
             if len(self.scores.shape) == 3:
                 best_alpha[chan] = np.argmax(np.mean(self.scores[:,chan,:],axis=0))
             else:
                 best_alpha[chan] = np.argmax(self.scores[:,chan,:],axis=0)
-        return best_alpha.astype(int)
+        alphas = best_alpha.astype(int)
+        return alphas
 
 
     def plot_score(self, figax = None, figsize = (5,5), color_type = 'rainbow', 
-                   channels = [], title = 'R2 sumary', minR2 = -np.inf):
-        '''
-        Descriptor
-        '''
+                   channels = [], title = 'R2 sumary', minscore = -np.inf):
+        """
+        Plot the score according to the regularization parameters.
+
+        Parameters
+        ----------
+        figax : tuple
+            contains (fig,ax) matplotlib object, if existing, the dimensions should fit. If None, create a new figure.
+        figsize : tuple
+            (x,y) size of figure
+        color_type : str
+            cmap to use
+        channels : list
+            Select a list of channels indices to plot. If empty, all channels are taken into account.
+        title : str
+            title of figure
+        minscore : float
+            Only plot channels that have a score above this value
+
+        Returns
+        -------
+        fig : Figure
+            Matplotlib figure object
+        ax : Axes
+            Matplotlib axis/axes
+        """
         if figax == None:
             fig,ax = plt.subplots(figsize = figsize)
         else:
@@ -673,7 +685,7 @@ class TRFEstimator(BaseEstimator):
 
         for index_channel in range(self.scores.shape[1]):
             score_chan = np.mean(self.scores[:,index_channel,:],axis = 0)
-            if np.max(score_chan > minR2):
+            if np.max(score_chan > minscore):
                 ax.plot(self.alpha, score_chan, color = color_map[index_channel], linewidth = 1.5, label = channels[index_channel])
         ax.set_title(title)
         ax.set_xlabel('Alpha')
@@ -688,7 +700,36 @@ class TRFEstimator(BaseEstimator):
 
     def plot_kernel(self, figax = None, figsize = False, color_type = 'rainbow', center_line = False,
                     channels = None, features = None, title = 'kernel sumary', minR2 = -np.inf):
-        """Plot the TRF of the feature requested as a *butterfly* plot"""
+        """
+        Plot the TRF of the feature requested as a butterfly plot.
+        
+        Parameters
+        ----------
+        figax : tuple
+            contains (fig,ax) matplotlib object, if existing, the dimensions should fit. If None, create a new figure.
+        figsize : tuple
+            (x,y) size of figure
+        color_type : str
+            cmap to use
+        center_line : bool
+            Whether to plot a line marking the time 0 (i.e. when input and output are in sync)
+        channels : list
+            Select a list of channels indices to plot. If empty, all channels are taken into account.
+        features : list
+            Select a list of features indices to plot. If empty, all features are taken into account.
+        title : str
+            title of figure
+        minscore : float
+            Only plot channels that have a score above this value
+
+        Returns
+        -------
+        fig : Figure
+            Matplotlib figure object
+        ax : Axes
+            Matplotlib axis/axes
+        """
+        
         if not figsize:
             figsize = (15, (self.n_feats_) * 4)
         if figax is None:
@@ -731,4 +772,22 @@ class TRFEstimator(BaseEstimator):
             ax.set_title(title)
         return fig,ax
 
+    def __repr__(self):
+        obj = """TRFEstimator(
+            alpha=%s,
+            srate=%s,
+            tmin=%s,
+            tmax=%s,
+            n_feats=%s,
+            n_chans=%s,
+            n_lags=%s,
+            features : %s,
+            fit_domain : %s,
+            direction: %s
+        )
+        """ % (self.alpha, self.srate, self.tmin, self.tmax,
+               self.n_feats_, self.n_chans_, 
+               len(self.lags) if self.lags is not None else None, str(self.feat_names_),
+              self.fit_domain, self.mtype)
+        return obj
 
