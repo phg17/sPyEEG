@@ -3,15 +3,11 @@ Setup file
 """
 import setuptools
 
-VERS = {}
-with open("./spyeeg/version.py") as fp:
-    exec(fp.read(), VERS)
-
 setuptools.setup(
     name='spyeeg',
-    version=VERS['__version__'],
+    version= "0.1.0",
     packages=setuptools.find_packages(),
-    license='MIT',
+    license='BSD 3',
     author='Pierre Guilleminot & Mikolaj Kegler',
     description='Package for modelling EEG responses to stimuli.'
 )
