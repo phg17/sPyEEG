@@ -10,6 +10,10 @@ authors = [{name = "Pierre Hieu Guilleminot", email = "pierre.hieu.guilleminot@g
 license = {text = 'BSD 3'}
 requires-python = ">3.8"
 readme = "README.md"
+dynamic = ["dependencies"]
+
+[tool.hatch.metadata.hooks.requirements_txt]
+files = ["requirements.txt"]
 
 [tool.setuptools]
 packages = ["spyeeg"]

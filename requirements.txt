@@ -10,3 +10,4 @@ matplotlib
 reservoirpy
 netCDF4
 h5netcdf
+PyQt5
