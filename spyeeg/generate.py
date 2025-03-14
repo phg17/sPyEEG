@@ -14,6 +14,28 @@ import colorednoise as cn
 from .preproc import scale_discrete, mix_signal_noise
 from mne.filter import filter_data
 
+def simulate_PAC(k_pac,time_array,lf,hf):
+    """
+    Generate a simple pac time series between two sine waves according to a coupling coefficient k_pac.
+
+    Parameters
+    ----------
+    k_pac : float or ndarray
+        Coupling coefficient, can either be stable along time (float), or change over time, in which case it is an ndarray of shape (Ntimes)
+    time_array : ndarray
+        Array of times, of shape (Ntimes)
+    lf : float
+        low-frequency of the PAC, from which we extract the phase
+    hf : float
+        high-frequency to be modulated
+    """
+    s1 = np.cos(2*np.pi*lf*time_array)
+    s1 -= np.min(s1)
+    s2 = np.cos(2*np.pi*hf*time_array)
+    phase = np.angle(signal.hilbert(s1))
+    amplitude = k_pac * np.cos(phase)
+    pac = amplitude * s2
+    return pac
 
 def simulate_continuous_stimuli(fs, time_array, mode = 'AR', phi = 1.1, noise_std = 0.9):
     """
@@ -76,7 +98,8 @@ def simulate_channels(n_feat = 2, n_channels = 3,
                       filter_impulse = False, filter_val = [0.01,20],
                       share_impulse = False,
                       random_seed = 0, scale_data = True,
-                      manual_events = None):
+                      manual_events = None,
+                      target_signal = 'raw', PAC_lf = 1, PAC_hf = 20):
     """
     Simulate M/sE/EEG channels as the combination of responses to arbitrary features and noise. 
     This supposedly models a linear time invariant system, considering noise as every process other than 
@@ -180,16 +203,20 @@ def simulate_channels(n_feat = 2, n_channels = 3,
     #Scale stimuli
     X = events.T
     if scale_data:
-        if stim_type == 'continuous':
-            X = scale(X,axis = 0)
-        else:
-            X = scale_discrete(X)
+        X = scale(X,axis = 0)
 
     #Generate channels as the convolution between features and impulse responses
     for i_channel in range(n_channels):
         for i_feat in range(n_feat):
             nonlinear_events[i_feat,:] = np.power(np.abs(events[i_feat,:]), compression_factor) * np.sign(events[i_feat,:])
-            response[i_channel] += weights_feat[i_feat]*convolve(nonlinear_events[i_feat,:], impulse_responses[i_feat, i_channel,:])[:n_samples]
+            if target_signal == 'raw':
+                response[i_channel] += weights_feat[i_feat]*convolve(nonlinear_events[i_feat,:], impulse_responses[i_feat, i_channel,:])[:n_samples]
+            elif target_signal == 'PAC':
+                response_feat = weights_feat[i_feat]*convolve(nonlinear_events[i_feat,:], impulse_responses[i_feat, i_channel,:])[:n_samples]
+                pac_feat = simulate_PAC(response_feat, time_array, PAC_lf, PAC_hf)
+                response[i_channel] += pac_feat
+            else:
+                raise "Not a valid target"
         noise = cn.powerlaw_psd_gaussian(beta_noise, n_samples)
         response[i_channel] = mix_signal_noise(response[i_channel], noise, snr_db)
 
@@ -202,7 +229,7 @@ def simulate_channels(n_feat = 2, n_channels = 3,
 
 def simulate_multisensory_channels(n_feat = 1, n_channels = 1, 
                       fs = 100, T = 60, 
-                      noise_level = 0, beta_noise = 0,
+                      snr_db = 0, beta_noise = 0,
                       stim_type = 'continuous', n_pulse = 120, 
                       compression_factor = 1, 
                       impulse_freqs = [0.1,10], decreasing_rates = [0.1,20], delays = [0.06,0.2],
@@ -276,9 +303,10 @@ def simulate_multisensory_channels(n_feat = 1, n_channels = 1,
     for i_feat in range(n_feat):
         for i_channel in range(n_channels):
             for i_modality in range(3):
-                noise = cn.powerlaw_psd_gaussian(beta_noise, n_samples) * noise_level
+                noise = cn.powerlaw_psd_gaussian(beta_noise, n_samples)
                 nonlinear_events[i_feat,:] = np.power(np.abs(events[i_feat,:]), compression_factor) * np.sign(events[i_feat,:])
-                response[i_modality,i_channel] += convolve(nonlinear_events[i_feat,:], impulse_responses[i_modality,i_feat, i_channel,:])[:n_samples] + noise
+                response[i_modality,i_channel] += convolve(nonlinear_events[i_feat,:], impulse_responses[i_modality,i_feat, i_channel,:])[:n_samples]
+                response[i_modality,i_channel] = mix_signal_noise(response[i_modality,i_channel], noise, snr_db)
         
     Y1, Y2, Y12 = response[0].T, response[1].T, response[2].T
     if scale_data:
