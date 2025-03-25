@@ -9,7 +9,7 @@ Not *mind-reading* for espionage purposes ;). (Definitely not that)
 ### Setup
 
 #### Requirements
-Package builds on top on [MNE](https://mne.tools/stable/index.html) and relies on a similar set of dependencies and 3rd party packages listed in ```requirements.txt```.
+Package builds on top on [MNE](https://mne.tools/stable/index.html) and relies on a similar set of dependencies and 3rd party packages listed in ```requirements.txt```. Normally, installing via pip will take care of dependencies but in case, you can check that there won't be problems.
 
 #### Installation
 For a standard installation (but this will require to be installed if you need to install another version of the library):
