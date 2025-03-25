@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "spyeeg"
-version = "0.1.0"
+version = "0.2.2"
 description = "Package for modelling electrophysiological responses to stimuli"
 authors = [{name = "Pierre Hieu Guilleminot", email = "pierre.hieu.guilleminot@gmail.com"}, {name = "Mikolaj Kegler", email = "mikolajkegler@gmail.com"}, {name = "Michael Thornton", email = "m.thornton20@imperial.ac.uk"}]
 license = {text = 'BSD 3'}
@@ -17,6 +17,7 @@ files = ["requirements.txt"]
 
 [tool.setuptools]
 packages = ["spyeeg"]
+license-files = []
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}

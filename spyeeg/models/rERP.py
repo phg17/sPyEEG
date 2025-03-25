@@ -1,6 +1,7 @@
 """
 Tool to do ERP regression.
-"""
+
+
 
 import os
 import numpy as np
@@ -316,6 +317,6 @@ class ERPEstimator():
 
         return scores
 
-
+"""
 
 
