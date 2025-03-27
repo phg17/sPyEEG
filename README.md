@@ -18,6 +18,9 @@ For a standard installation (but this will require to be installed if you need t
 pip install spyeeg
 ```
 
+#### Citation
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7006933.svg)](https://doi.org/10.5281/zenodo.7006933)
+
 ##### Tested on:
 - macOS Big Sur v11.1
 - Ubuntu 18.04.5 LTS
