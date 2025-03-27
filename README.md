@@ -1,7 +1,9 @@
 # sPyEEG
 
 #### Citation
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7006933.svg)](https://doi.org/10.5281/zenodo.7006933)
+Pierre Hieu Guilleminot, Mikolaj Kegler, & Enrico Varano. (2021). sPyEEG (0.0.1). Zenodo. https://doi.org/10.5281/zenodo.7006933
+
+DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7006933.svg)](https://doi.org/10.5281/zenodo.7006933)
 
 #### Version: 0.2.2
 
