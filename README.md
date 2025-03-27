@@ -1,5 +1,8 @@
 # sPyEEG
 
+#### Citation
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7006933.svg)](https://doi.org/10.5281/zenodo.7006933)
+
 #### Version: 0.2.2
 
 Package for modelling s/M/EEG responses to stimuli. In other words, for mapping sensory or cognitive features, through python (*sPyeech*) to EEG (*sPyEEG*)... and the other way around! 
@@ -17,9 +20,6 @@ For a standard installation (but this will require to be installed if you need t
 ```bash
 pip install spyeeg
 ```
-
-#### Citation
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7006933.svg)](https://doi.org/10.5281/zenodo.7006933)
 
 ##### Tested on:
 - macOS Big Sur v11.1
