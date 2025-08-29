@@ -7,7 +7,7 @@ joblib
 psutil
 pandas
 matplotlib
-reservoirpy
+reservoirpy==0.3
 netCDF4
 h5netcdf
 PyQt5
