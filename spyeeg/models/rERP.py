@@ -1,8 +1,3 @@
-"""
-Tool to do ERP regression.
-
-
-
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -317,6 +312,5 @@ class ERPEstimator():
 
         return scores
 
-"""
 
 

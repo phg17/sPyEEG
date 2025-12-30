@@ -573,3 +573,168 @@ def _resample_array(array, new_length):
 
     return resampled
 
+
+
+
+
+
+
+
+def _soft_threshold_singular_values(M: np.ndarray, tau: float):
+    """
+    Prox for nuclear norm: prox_{tau||.||_*}(M) = U diag((s - tau)_+) V^T
+    Returns (proxM, rank, s_thresh).
+    """
+    # Full SVD; for large problems, swap for randomized / partial SVD.
+    U, s, Vt = np.linalg.svd(M, full_matrices=False)
+    s_thresh = np.maximum(s - tau, 0.0)
+    r = int(np.sum(s_thresh > 0))
+    if r == 0:
+        return np.zeros_like(M), 0, s_thresh
+    # Efficient reconstruction using only nonzero singular values
+    U_r = U[:, :r]
+    Vt_r = Vt[:r, :]
+    s_r = s_thresh[:r]
+    return (U_r * s_r) @ Vt_r, r, s_thresh
+
+
+def _spectral_norm_sq_power(X: np.ndarray, n_iter: int = 50, seed: int = 0) -> float:
+    """
+    Approximate ||X||_2^2 via power iteration on X^T X.
+    Returns an estimate of the largest eigenvalue of X^T X (i.e., ||X||_2^2).
+    """
+    rng = np.random.default_rng(seed)
+    d = X.shape[1]
+    v = rng.standard_normal(d)
+    v /= np.linalg.norm(v) + 1e-12
+    for _ in range(n_iter):
+        v = X.T @ (X @ v)
+        nv = np.linalg.norm(v)
+        if nv < 1e-12:
+            return 0.0
+        v /= nv
+    # Rayleigh quotient for X^T X
+    Xv = X @ v
+    return float(Xv.T @ Xv)
+
+
+def fit_iRRR_fista(
+    X: np.ndarray,
+    Y: np.ndarray,
+    lam: float,
+    *,
+    max_iter: int = 500,
+    tol: float = 1e-5,
+    step: float | None = None,
+    power_iter: int = 50,
+    fista_restart: bool = True,
+    center_X: bool = False,
+    center_Y: bool = True,
+    verbose: bool = False,
+):
+    """
+    Fit iRRR with a single predictor matrix X using FISTA:
+
+        min_B  0.5 ||Y - X B||_F^2  + lam ||B||_*
+
+    Inputs
+    ------
+    X: (T, d)  design matrix (already includes lags, etc.)
+    Y: (T, p)  response matrix (channels)
+    lam:       nuclear-norm regularization strength
+
+    Returns
+    -------
+    B: (d, p) coefficient matrix
+    info: dict with optimization history
+    """
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    T, d = X.shape
+    Ty, p = Y.shape
+    if Ty != T:
+        raise ValueError(f"X and Y must have same first dim. Got X:{X.shape}, Y:{Y.shape}")
+
+    # Optional centering (common in encoding models)
+    X_mean = X.mean(axis=0, keepdims=True) if center_X else np.zeros((1, d))
+    Y_mean = Y.mean(axis=0, keepdims=True) if center_Y else np.zeros((1, p))
+    Xc = X - X_mean
+    Yc = Y - Y_mean
+
+    # Step size: 1 / L where L = ||X||_2^2 (Lipschitz constant of grad)
+    if step is None:
+        L = _spectral_norm_sq_power(Xc, n_iter=power_iter)
+        if L <= 1e-12:
+            # Degenerate X: best fit is B=0 (or undefined); return zeros.
+            B = np.zeros((d, p))
+            return B, {"obj": [0.5 * np.linalg.norm(Yc, "fro") ** 2], "rank": [0], "step": np.inf}
+        step = 1.0 / L
+
+    # Initialize
+    B = np.zeros((d, p))
+    Z = B.copy()
+    t = 1.0
+
+    obj_hist = []
+    rank_hist = []
+
+    # Precompute for objective (cheap enough)
+    def objective(Bmat):
+        R = Yc - Xc @ Bmat
+        return 0.5 * np.linalg.norm(R, "fro") ** 2 + lam * np.sum(np.linalg.svd(Bmat, compute_uv=False))
+
+    prev_obj = None
+
+    for it in range(1, max_iter + 1):
+        # Gradient at Z: grad = X^T (X Z - Y)
+        Rz = Xc @ Z - Yc
+        G = Xc.T @ Rz
+
+        # Prox step (SVT)
+        M = Z - step * G
+        B_next, rnk, _ = _soft_threshold_singular_values(M, tau=step * lam)
+
+        # FISTA momentum
+        t_next = 0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t))
+        Z_next = B_next + ((t - 1.0) / t_next) * (B_next - B)
+
+        # Optional adaptive restart (often stabilizes & speeds up)
+        if fista_restart:
+            # If momentum is not helping, restart
+            if np.sum((B_next - B) * (Z_next - B_next)) > 0:
+                Z_next = B_next.copy()
+                t_next = 1.0
+
+        # Track objective occasionally (every iter here; you can thin if needed)
+        # NOTE: objective uses an SVD; for speed, you might compute it every k iters.
+        obj = objective(B_next)
+        obj_hist.append(obj)
+        rank_hist.append(rnk)
+
+        # Convergence checks
+        if prev_obj is not None:
+            rel_obj = abs(prev_obj - obj) / (abs(prev_obj) + 1e-12)
+            rel_step = np.linalg.norm(B_next - B, "fro") / (np.linalg.norm(B, "fro") + 1e-12)
+            if verbose and (it % 25 == 0 or it == 1):
+                print(f"iter {it:4d}  obj={obj:.6e}  rank={rnk:3d}  rel_obj={rel_obj:.2e}  rel_step={rel_step:.2e}")
+            if (rel_obj < tol) and (rel_step < np.sqrt(tol)):
+                B = B_next
+                break
+        else:
+            if verbose:
+                print(f"iter {it:4d}  obj={obj:.6e}  rank={rnk:3d}")
+
+        prev_obj = obj
+        B, Z, t = B_next, Z_next, t_next
+
+    info = {
+        "obj": obj_hist,
+        "rank": rank_hist,
+        "n_iter": len(obj_hist),
+        "step": step,
+        "X_mean": X_mean,
+        "Y_mean": Y_mean,
+        "center_X": center_X,
+        "center_Y": center_Y,
+    }
+    return B, info

@@ -185,7 +185,8 @@ def simulate_channels(n_feat = 2, n_channels = 3,
         elif stim_type == 'continuous':
             for i_feat in range(n_feat):
                 y = simulate_continuous_stimuli(fs, time_array)
-                events[i_feat,:] = MinMaxScaler(feature_range=(-1,1)).fit_transform(y.reshape(-1, 1)).reshape(-1)
+                if scale_data:
+                    events[i_feat,:] = MinMaxScaler(feature_range=(-1,1)).fit_transform(y.reshape(-1, 1)).reshape(-1)
         else:
             raise ValueError(f"Invalid value for 'stim_type': {stim_type}. Must be one of discrete or continuous.")
     else:
@@ -195,11 +196,12 @@ def simulate_channels(n_feat = 2, n_channels = 3,
     for i_feat in range(n_feat):
         for i_channel in range(n_channels):
             impulse_responses[i_feat, i_channel,:] = weights_channel[i_channel]*scale(np.roll(np.sin(2*np.pi*np.random.randint(impulse_freqs[0],impulse_freqs[1])*time_array + np.random.rand()*2*np.pi) * np.exp(-time_array*np.random.randint(decreasing_rates[0],decreasing_rates[1])), np.random.randint(int(delays[0]*fs),int(delays[1]*fs)))) / n_samples
+            #impulse_responses[i_feat, i_channel,:] = weights_channel[i_channel]*np.roll(np.sin(2*np.pi*np.random.randint(impulse_freqs[0],impulse_freqs[1])*time_array + np.random.rand()*2*np.pi) * np.exp(-time_array*np.random.randint(decreasing_rates[0],decreasing_rates[1])), np.random.randint(int(delays[0]*fs),int(delays[1]*fs))) / n_samples
             if filter_impulse:
                 impulse_responses[i_feat, i_channel,:] = filter_data(impulse_responses[i_feat, i_channel,:],fs,filter_val[0],filter_val[1], verbose = False)
             if share_impulse:
                 impulse_responses[i_feat, i_channel,:] = weights_channel[i_channel]*impulse_responses[i_feat, 0,:]
-
+    
     #Scale stimuli
     X = events.T
     if scale_data:
@@ -219,7 +221,7 @@ def simulate_channels(n_feat = 2, n_channels = 3,
                 raise "Not a valid target"
         noise = cn.powerlaw_psd_gaussian(beta_noise, n_samples)
         response[i_channel] = mix_signal_noise(response[i_channel], noise, snr_db)
-
+    
     #scale channels
     Y = response.T
     if scale_data:

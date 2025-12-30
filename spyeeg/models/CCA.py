@@ -4,14 +4,18 @@ import numpy as np
 
 from sklearn.base import BaseEstimator
 from sklearn.decomposition import PCA
+from ..utils import lag_matrix, lag_span, lag_sparse, mem_check
 
 from ._methods import _inverse_square_root, _pairwise_corr
 from ..utils import lag_matrix, lag_span, lag_sparse
+from ._methods import _ridge_fit_SVD, _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat
 
 
 class CCAEstimator(BaseEstimator):
 
-    def __init__(self, n_components=None, reg=[0, 0], lags=[[0], [0]], use_pca_dimensionality_reduction=True, n_pca_components=None):
+    def __init__(self, n_components=None, alphaX = 0, alphaY = 0, srate = 1,
+                tminX = None, tminY = None, tmaxX = None, tmaxY = None,
+                use_pca_dimensionality_reduction=True, n_pca_components=None):
 
         '''
         Initialises the CCA object with the following parameters:
@@ -30,10 +34,48 @@ class CCAEstimator(BaseEstimator):
         '''
 
         self.n_components = n_components
-        self.reg = reg
-        self.lags = lags
+        self.alphaX = alphaX
+        self.alphaY = alphaY
+        self.reg = [self.alphaX, self.alphaY]
+        self.tminX = tminX
+        self.tminY = tminY
+        self.tmaxX = tmaxX
+        self.tmaxY = tmaxY
+        self.srate = srate
         self.n_pca_components = n_pca_components
         self.use_pca_dimensionality_reduction = use_pca_dimensionality_reduction
+        self.lagsX = None
+        self.lagsY = None
+        self.scores = None
+        self.timesX = None
+        self.timesY = None
+
+
+    def fill_lags(self):
+        """
+        Fill the lags attributes, with number of samples and times in seconds.
+        """
+        if (self.tminX != None) and (self.tmaxX != None):
+            # LOGGER.info("Will use lags spanning form tmin to tmax.\nTo use individual lags, use the `times` argument...")
+            self.lagsX = lag_span(self.tminX, self.tmaxX, srate=self.srate)[
+                ::-1]  # pylint: disable=invalid-unary-operand-type
+            # self.lags = lag_span(-tmax, -tmin, srate=srate) #pylint: disable=invalid-unary-operand-type
+            self.timesX = self.lagsX[::-1] / self.srate
+        else:
+            self.timesX = np.asarray(self.timesX)
+            self.lagsX = lag_sparse(self.timesX, self.srate)[::-1]
+
+        if (self.tminY != None) and (self.tmaxY != None):
+            # LOGGER.info("Will use lags spanning form tmin to tmax.\nTo use individual lags, use the `times` argument...")
+            self.lagsY = lag_span(self.tminY, self.tmaxY, srate=self.srate)[
+                ::-1]  # pylint: disable=invalid-unary-operand-type
+            # self.lags = lag_span(-tmax, -tmin, srate=srate) #pylint: disable=invalid-unary-operand-type
+            self.timesY = self.lagsY[::-1] / self.srate
+        else:
+            self.timesY = np.asarray(self.timesY)
+            self.lagsY = lag_sparse(self.timesY, self.srate)[::-1]
+        self.lags = [self.lagsX, self.lagsY]
+        self.times = [self.timesX, self.timesY]
 
     
     def _get_covariance_matrices(self, X, Y):
@@ -52,7 +94,7 @@ class CCAEstimator(BaseEstimator):
         cov_Y: numpy array of shape (n_features_Y, n_features_Y)
         cov_XY: numpy array of shape (n_features_X, n_features_Y)
         '''
-
+        self.fill_lags()
         data = [X, Y]
 
         t0 = time.time()
@@ -148,7 +190,7 @@ class CCAEstimator(BaseEstimator):
         raise NotImplementedError('This method is not implemented for the CCA class. Please use the transform method instead.')
     
 
-    def score(self, X, Y):
+    def score(self, X, Y, metrics = 'corr'):
 
         '''
         returns the correlation coefficient between each pair of canonical variables]
@@ -164,5 +206,9 @@ class CCAEstimator(BaseEstimator):
         '''
 
         X_transformed, Y_transformed = self.transform(X, Y)
+        print(X_transformed.shape, Y_transformed.shape)
 
-        return _pairwise_corr(X_transformed, Y_transformed)
+        if metrics == 'corr':
+            return _pairwise_corr(X_transformed, Y_transformed)
+        elif metrics == 'R2':
+            return _r2_multifeat(X_transformed, Y_transformed)
