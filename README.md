@@ -1,7 +1,7 @@
 # sPyEEG
 
 #### Citation
-Pierre Hieu Guilleminot, Mikolaj Kegler, & Enrico Varano. (2021). sPyEEG (0.0.1). Zenodo. https://doi.org/10.5281/zenodo.7006933
+Pierre Hieu Guilleminot, Mikolaj Kegler, & Enrico Varano. (2025). sPyEEG (0.2.7). Zenodo. https://doi.org/10.5281/zenodo.7006933
 
 [https://doi.org/10.5281/zenodo.18160715](https://doi.org/10.5281/zenodo.18160715)
 
