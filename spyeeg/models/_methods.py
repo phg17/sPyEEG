@@ -618,14 +618,14 @@ def _spectral_norm_sq_power(X: np.ndarray, n_iter: int = 50, seed: int = 0) -> f
     return float(Xv.T @ Xv)
 
 
-def fit_iRRR_fista(
+def fit_RRR_fista(
     X: np.ndarray,
     Y: np.ndarray,
     lam: float,
     *,
     max_iter: int = 500,
     tol: float = 1e-5,
-    step: float | None = None,
+    step: float = None ,
     power_iter: int = 50,
     fista_restart: bool = True,
     center_X: bool = False,
@@ -736,5 +736,201 @@ def fit_iRRR_fista(
         "Y_mean": Y_mean,
         "center_X": center_X,
         "center_Y": center_Y,
+    }
+    return B, info
+
+
+
+
+def fit_iRRR_fista(
+    X_blocks,
+    Y,
+    lam_blocks,
+    *,
+    max_iter: int = 500,
+    tol: float = 1e-5,
+    step: float = None,
+    power_iter: int = 30,
+    fista_restart: bool = True,
+    center_X: bool = False,
+    center_Y: bool = True,
+    verbose: bool = False,
+):
+    """
+    Integrated RRR (multi-block nuclear norm) via FISTA:
+
+        min_{B_k} 0.5 || Y - sum_k X_k B_k ||_F^2  +  sum_k lam_k ||B_k||_*
+
+    Parameters
+    ----------
+    X_blocks : list of ndarray
+        Each X_k has shape (T, d_k). (Already includes lags if you want.)
+    Y : ndarray
+        Shape (T, p) outputs (channels).
+    lam_blocks : float or list/ndarray
+        If float, shared lambda across blocks; else length K.
+
+    Returns
+    -------
+    B_blocks : list of ndarray
+        Each B_k has shape (d_k, p).
+    info : dict
+        Contains objective history, ranks per block per iter, step size, means, etc.
+    """
+    # --- validate / coerce ---
+    if not isinstance(X_blocks, (list, tuple)) or len(X_blocks) == 0:
+        raise ValueError("X_blocks must be a non-empty list/tuple of design matrices.")
+    X_blocks = [np.asarray(Xk, dtype=float) for Xk in X_blocks]
+    Y = np.asarray(Y, dtype=float)
+
+    T = X_blocks[0].shape[0]
+    for k, Xk in enumerate(X_blocks):
+        if Xk.ndim != 2:
+            raise ValueError(f"X_blocks[{k}] must be 2D, got {Xk.shape}.")
+        if Xk.shape[0] != T:
+            raise ValueError("All X_k must have the same number of rows (T).")
+    if Y.ndim != 2 or Y.shape[0] != T:
+        raise ValueError(f"Y must be 2D with shape (T, p). Got {Y.shape}.")
+
+    K = len(X_blocks)
+    p = Y.shape[1]
+    d_blocks = [Xk.shape[1] for Xk in X_blocks]
+
+    if np.isscalar(lam_blocks):
+        lam = [float(lam_blocks)] * K
+    else:
+        lam = list(np.asarray(lam_blocks, dtype=float).ravel())
+        if len(lam) != K:
+            raise ValueError(f"lam_blocks must have length K={K}, got {len(lam)}.")
+
+    # --- centering ---
+    X_means = []
+    Xc_blocks = []
+    for Xk in X_blocks:
+        mk = Xk.mean(axis=0, keepdims=True) if center_X else np.zeros((1, Xk.shape[1]))
+        X_means.append(mk)
+        Xc_blocks.append(Xk - mk)
+
+    Y_mean = Y.mean(axis=0, keepdims=True) if center_Y else np.zeros((1, p))
+    Yc = Y - Y_mean
+
+    # --- step size ---
+    # Lipschitz constant of gradient of smooth term:
+    # L = || sum_k X_k^T X_k ||_2 <= sum_k ||X_k||_2^2
+    if step is None:
+        L_est = 0.0
+        for k, Xk in enumerate(Xc_blocks):
+            L_est += _spectral_norm_sq_power(Xk, n_iter=power_iter, seed=k)
+        if L_est <= 1e-12:
+            # Degenerate case
+            B0 = [np.zeros((d_blocks[k], p)) for k in range(K)]
+            return B0, {
+                "obj": [0.5 * np.linalg.norm(Yc, "fro") ** 2],
+                "ranks": [[0] * K],
+                "step": np.inf,
+                "X_means": X_means,
+                "Y_mean": Y_mean,
+                "center_X": center_X,
+                "center_Y": center_Y,
+            }
+        step = 1.0 / L_est
+    step = float(step)
+
+    # --- initialize ---
+    B = [np.zeros((d_blocks[k], p)) for k in range(K)]
+    Z = [Bk.copy() for Bk in B]
+    t = 1.0
+
+    # Residual for Z: Rz = sum_k Xk Zk - Y
+    Rz = -Yc.copy()
+    for k in range(K):
+        Rz += Xc_blocks[k] @ Z[k]
+
+    obj_hist = []
+    ranks_hist = []
+
+    def objective(B_list):
+        R = -Yc.copy()
+        nuc = 0.0
+        for k in range(K):
+            R += Xc_blocks[k] @ B_list[k]
+            nuc += lam[k] * np.sum(np.linalg.svd(B_list[k], compute_uv=False))
+        return 0.5 * np.linalg.norm(R, "fro") ** 2 + nuc
+
+    prev_obj = None
+
+    for it in range(1, max_iter + 1):
+        B_next = []
+        ranks_this = []
+
+        # We will update prox for each block using the *same* gradient point Z.
+        # Efficient gradients: Gk = Xk^T Rz where Rz = sum_j Xj Zj - Y.
+        for k in range(K):
+            Gk = Xc_blocks[k].T @ Rz
+            Mk = Z[k] - step * Gk
+            Bk_new, rk, s_th = _soft_threshold_singular_values(Mk, tau=step * lam[k])
+            B_next.append(Bk_new)
+            ranks_this.append(rk)
+
+        # FISTA momentum
+        t_next = 0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t))
+        Z_next = []
+        for k in range(K):
+            Zk_new = B_next[k] + ((t - 1.0) / t_next) * (B_next[k] - B[k])
+            Z_next.append(Zk_new)
+
+        # Optional restart (common/simple criterion)
+        if fista_restart:
+            # A lightweight restart check: if objective increases, restart momentum.
+            obj_try = objective(B_next)
+            if prev_obj is not None and obj_try > prev_obj:
+                t_next = 1.0
+                Z_next = [Bk.copy() for Bk in B_next]
+                obj = objective(B_next)
+            else:
+                obj = obj_try
+        else:
+            obj = objective(B_next)
+
+        obj_hist.append(obj)
+        ranks_hist.append(ranks_this)
+
+        # Convergence
+        if prev_obj is not None:
+            rel_obj = abs(prev_obj - obj) / (abs(prev_obj) + 1e-12)
+            rel_step = 0.0
+            denom = 0.0
+            for k in range(K):
+                rel_step += np.linalg.norm(B_next[k] - B[k], "fro") ** 2
+                denom += np.linalg.norm(B[k], "fro") ** 2
+            rel_step = np.sqrt(rel_step) / (np.sqrt(denom) + 1e-12)
+
+            if verbose and (it == 1 or it % 25 == 0):
+                print(f"iter {it:4d}  obj={obj:.6e}  ranks={ranks_this}  rel_obj={rel_obj:.2e}  rel_step={rel_step:.2e}")
+
+            if (rel_obj < tol) and (rel_step < np.sqrt(tol)):
+                B, Z, t = B_next, Z_next, t_next
+                break
+        else:
+            if verbose:
+                print(f"iter {it:4d}  obj={obj:.6e}  ranks={ranks_this}")
+
+        # Update state and residual for next iteration
+        B, Z, t = B_next, Z_next, t_next
+        Rz = -Yc.copy()
+        for k in range(K):
+            Rz += Xc_blocks[k] @ Z[k]
+        prev_obj = obj
+
+    info = {
+        "obj": obj_hist,
+        "rank": ranks_hist,          # list of [rank_k] per iter
+        "step": step,
+        "X_means": X_means,           # list of (1, d_k)
+        "Y_mean": Y_mean,             # (1, p)
+        "center_X": center_X,
+        "center_Y": center_Y,
+        "n_iter": len(obj_hist),
+        "lam": lam,
     }
     return B, info

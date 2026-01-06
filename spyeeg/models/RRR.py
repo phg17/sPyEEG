@@ -1,80 +1,66 @@
 """
-Reduced-Rank Regression (iRRR single-block) using FISTA.
+Classic TRF.
 """
 
 import numpy as np
 from sklearn.model_selection import KFold
+import matplotlib.pyplot as plt
 from mne.decoding import BaseEstimator
-
-from ._methods import fit_iRRR_fista, lag_span, lag_sparse, lag_matrix
-from ._methods import _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat
-
+from ..utils import lag_matrix, lag_span, lag_sparse, mem_check
+from scipy import linalg
+import mne
+from ._methods import fit_iRRR_fista, fit_RRR_fista
+from ._methods import _get_covmat, _corr_multifeat, _rmse_multifeat, _r2_multifeat, _rankcorr_multifeat, _ezr2_multifeat, _adjr2_multifeat
+from sklearn.metrics import r2_score, root_mean_squared_error
+from scipy.stats import pearsonr
+from matplotlib import colormaps as cmaps
 
 class RRREstimator(BaseEstimator):
     """
-    Single-block iRRR / trace-norm regularized multioutput regression:
-
-        min_B 0.5 ||Y - X B||_F^2 + lam ||B||_*
+    This implements a RRR to relate a continuous stimuli and electrophysiological data. The model functions under the same assumptions as the TRF (linear time-invariance), but assumes a low-rank response of the system.
 
     Parameters
     ----------
-    alpha : list | ndarray
-        Regularization strengths (here: lambda for nuclear norm). If list, fit all.
-    fit_intercept : bool
-        If True, include intercept. Implemented by adding a column of ones to X
-        (so intercept is not trace-penalized) OR by centering inside fit_iRRR_fista.
-        Default here uses explicit intercept column to avoid penalizing intercept.
-    center_X : bool
-        If True, center X before fitting (passed to fit_iRRR_fista when fit_intercept=False).
-    center_Y : bool
-        If True, center Y before fitting (passed to fit_iRRR_fista when fit_intercept=False).
-    max_iter, tol, power_iter, fista_restart, step, verbose :
-        Passed through to fit_iRRR_fista.
+    times : tuple
+        mismatch a -> b, where a - dependent, b - predicted. Negative timelags indicate a lagging behind b. Positive timelags indicate b lagging behind a
+    tmin : float
+        Minimum time lag (in seconds). Can be negative to check for lags in the past (~null model).
+    tmax : float
+        Maximum time lag (in seconds). Can be large to check for lags in the future (~null model).
+    srate : float
+        Sampling rate of the data.
+    lam : list
+        Regularization parameter for the model. 
+        This regularization parameter represents how much the model seeks to reduce the rank of the representation.
     """
 
-    def __init__(
-        self,
-        alpha=(0.0,),
-        tmin = None, 
-        tmax = None,
-        srate = 1. ,
-        fit_intercept=False,
-        center_X=False,
-        center_Y=True,
-        max_iter=500,
-        tol=1e-5,
-        power_iter=50,
-        fista_restart=True,
-        step=None,
-        verbose=False,
-    ):
-        self.alpha = np.asarray(alpha, dtype=float)
+    def __init__(self, times=(0.,), tmin=None, tmax=None, srate=1., lam=0., max_iter=1000, tol=1e-6, blocks = False):
+        """
+        Initialize the class instance.
+        """
+
         self.tmin = tmin
         self.tmax = tmax
-        self.fit_intercept = bool(fit_intercept)
-        self.center_X = bool(center_X)
-        self.center_Y = bool(center_Y)
+        self.times = times
         self.srate = srate
-
-        self.max_iter = int(max_iter)
-        self.tol = float(tol)
-        self.power_iter = int(power_iter)
-        self.fista_restart = bool(fista_restart)
-        self.step = step  # None or float
-        self.verbose = bool(verbose)
-
+        self.lam = lam
+        self.max_iter = max_iter
+        self.tol = tol
+        self.blocks = blocks
+        # Forward or backward. Required for formatting coefficients in get_coef (convention: forward - stimulus -> eeg, backward - eeg - stimulus)
         self.fitted = False
+        self.lags = None
 
-        # Fitted attributes
-        self.coef_ = None          # (n_features(+1), n_channels, n_alpha)
-        self.intercept_ = None     # (n_channels, n_alpha) if fit_intercept else None
+        # All following attributes are only defined once fitted (hence the "_" suffix)
+        self.intercept_ = None
+        self.coef_ = None
         self.n_feats_ = None
         self.n_chans_ = None
+        self.feat_names_ = None
         self.valid_samples_ = None
+        # Scores when computed
         self.scores = None
-
-        # iRRR-specific info (one dict per alpha)
-        self.rrr_info_ = None
+        self.rank = None
 
     def fill_lags(self):
         """
@@ -119,7 +105,6 @@ class RRREstimator(BaseEstimator):
         X = np.asarray(X)
         y = np.asarray(y)
 
-
         # Fill n_feat and n_chan attributes
         # if X has been lagged, divide by number of lags
         self.n_feats_ = X.shape[1] if not lagged else X.shape[1] // len(
@@ -154,202 +139,207 @@ class RRREstimator(BaseEstimator):
 
         return X, y
 
-    def fit(self, X, y, drop=True):
+
+    def fit(self, X, y, lagged=False, drop=True, feat_names=()):
         """
-        Fit iRRR for each alpha (lambda). Stores coef_ as (d(+1), p, n_alpha).
+        Fit the RRR model in either the time of frequency domain. The convention is to map X -> y. In order to properly retrieve the coefficients, respect the convention using the 'mtype' argument. This fills the coefficients attributes with shape (alphas, nlags, nfeats)
+        
+        Parameters
+        ----------
+        X : ndarray 
+            input of shape (T, nfeats)
+        y : ndarray
+            output of shape (T, nfeats)
+        lagged : bool
+            Whether the X matrix has been previously 'lagged'.
+        drop : bool
+            Whether to drop non valid samples (if False, non valid sample are filled with 0.)
+        feat_names : list
+            Names of features being fitted. Must be of length ``nfeats``.
+            
+        Returns
+        -------
+        coef_ : ndarray 
+            coefficients of shape (alphas, nlags, nfeats)
         """
-        X, y = self.get_XY(X, y, drop=drop)
-        X = np.asarray(X, dtype=float)
-        y = np.asarray(y, dtype=float)
 
-        T, d = X.shape
-        _, p = y.shape
+        # Preprocess and lag inputs
+        X, y = self.get_XY(X, y, lagged, drop, feat_names)
 
-        n_alpha = len(self.alpha)
-        self.rrr_info_ = [None] * n_alpha
-
-        if self.fit_intercept:
-            # Explicit intercept column (NOT trace-penalized if we fit B on augmented X,
-            # because trace norm will penalize it. To avoid penalizing intercept, we:
-            # 1) center X and Y internally (recommended) OR
-            # 2) fit on centered data and keep intercept separately.
-            #
-            # Here: do the standard trick: center X and Y; fit B on centered; intercept = mean(Y) - mean(X)B
-            X_mean = X.mean(axis=0, keepdims=True)
-            Y_mean = y.mean(axis=0, keepdims=True)
-            Xc = X - X_mean
-            Yc = y - Y_mean
-
-            B_all = np.zeros((d, p, n_alpha))
-            intercept_all = np.zeros((p, n_alpha))
-
-            for i, lam in enumerate(self.alpha):
-                B, info = fit_iRRR_fista(
-                    Xc, Yc, lam,
-                    max_iter=self.max_iter,
-                    tol=self.tol,
-                    step=self.step,
-                    power_iter=self.power_iter,
-                    fista_restart=self.fista_restart,
-                    center_X=False,
-                    center_Y=False,
-                    verbose=self.verbose,
-                )
-                B_all[:, :, i] = B
-                intercept_all[:, i] = (Y_mean - X_mean @ B).ravel()
-                info = dict(info)  # defensive copy
-                info["X_mean_external"] = X_mean
-                info["Y_mean_external"] = Y_mean
-                self.rrr_info_[i] = info
-
-            self.coef_ = B_all
-            self.intercept_ = intercept_all
-
+        # Regress with Ridge to obtain coef for the input alpha
+        if not self.blocks:
+            self.coef_, info_RRR = fit_RRR_fista(X, y, lam = self.lam, max_iter=self.max_iter, tol= self.tol)
         else:
-            # Use centering options from fit_iRRR_fista (intercept implicitly handled if center_Y True)
-            B_all = np.zeros((d, p, n_alpha))
-            for i, lam in enumerate(self.alpha):
-                B, info = fit_iRRR_fista(
-                    X, y, lam,
-                    max_iter=self.max_iter,
-                    tol=self.tol,
-                    step=self.step,
-                    power_iter=self.power_iter,
-                    fista_restart=self.fista_restart,
-                    center_X=self.center_X,
-                    center_Y=self.center_Y,
-                    verbose=self.verbose,
-                )
-                B_all[:, :, i] = B
-                self.rrr_info_[i] = info
-
-            self.coef_ = B_all
-            self.intercept_ = None
-
+            X_blocks = X.reshape(X.shape[0],len(self.times),self.n_feats_)
+            X_blocks = list(np.moveaxis(X_blocks, 2, 0))
+            self.coef_, info_RRR = fit_iRRR_fista(X_blocks, y, lam_blocks=self.lam, verbose=False, max_iter=1000)
         self.fitted = True
+        self.rank = info_RRR['rank'][-1]
+
         return self.coef_.copy()
+
+    def get_coef(self):
+        """
+        Format and return coefficients. Note mtype attribute needs to be declared in the __init__.
+
+        Returns
+        -------
+        coef_ : ndarray (nlags x nfeats x nchans x regularization params)
+        """
+
+        betas = np.reshape(self.coef_, (len(self.lags),
+                                        self.n_feats_, self.n_chans_))
+        betas = betas[::-1, :]
+        return betas
+
 
     def predict(self, X):
         """
-        Predict Y from X using stored coef_ and intercept_.
-        Returns: (T, n_chans, n_alpha)
+        Compute output based on fitted coefficients and feature matrix X.
+        
+        Parameters
+        ----------
+        X : ndarray
+            Matrix of features (can be already lagged or not).
+            
+        Returns
+        -------
+        ndarray
+            Reconstruction of target with current beta estimates
         """
+        
         assert self.fitted, "Fit model first!"
-        X = np.asarray(X, dtype=float)
 
-        if X.ndim != 2:
-            raise ValueError(f"X must be 2D (T, d). Got {X.shape}")
+        #betas = self.get_coef()[:]
+        betas = self.coef_[:]
 
-        T = X.shape[0]
-        n_alpha = self.coef_.shape[-1]
+        # Check if input has been lagged already, if not, do it:
+        X = lag_matrix(X, lag_samples=self.lags, filling=0.)
 
-        pred = np.zeros((T, self.n_chans_, n_alpha), dtype=float)
-        for i in range(n_alpha):
-            Bi = self.coef_[:, :, i]
-            yi = X @ Bi
-            if self.fit_intercept:
-                yi = yi + self.intercept_[:, i][None, :]
-            else:
-                # If fit_iRRR_fista centered Y, it stored Y_mean in info; add it back for predictions.
-                info = self.rrr_info_[i]
-                Y_mean = info.get("Y_mean", None)
-                X_mean = info.get("X_mean", None)
-                # If centering was enabled inside fit_iRRR_fista, it expects you to apply same centering at predict time:
-                if (X_mean is not None) and (np.any(X_mean != 0)):
-                    yi = (X - X_mean) @ Bi
-                if (Y_mean is not None) and (np.any(Y_mean != 0)):
-                    yi = yi + Y_mean
-            pred[:, :, i] = yi
 
-        return pred
+        # Do it for every alpha
+        if not self.blocks:
+            pred = X@betas
+        else:
+            X_blocks = X.reshape(X.shape[0],len(self.times),self.n_feats_)
+            X_blocks = list(np.moveaxis(X_blocks, 2, 0))
+            pred = 0.0
+            for Xk, Bk in zip(X_blocks, self.coef_):
+                pred += Xk @ Bk
 
-    def score(self, Xtest, ytrue, Xtrain=None, scoring="R2"):
-        """
-        Mirror TRFEstimator.score: compute metric per alpha and per channel.
-        Returns: (n_chans, n_alpha)
+        return pred  # Shape T x Nchan x Alpha
+
+        
+    def score(self, Xtest, ytrue, Xtrain = None, scoring="R2"):
+        """Compute a score of the model given true target and estimated target from Xtest.
+        
+        Parameters
+        ----------
+        Xtest : ndarray
+            Array used to get "yhat" estimate from model
+        ytrue : ndarray
+            True target
+        scoring : str
+            Scoring function to be used ("corr", "rankcorr", "rmse", "R2", "ezekiel", 'adj_R2')
+            
+        Returns
+        -------
+        scores: ndarray
+            Scores computed on whole segment.
         """
         yhat = self.predict(Xtest)
-        reg_len = yhat.shape[-1]
 
-        if scoring == "corr":
-            scores = np.stack([_corr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(reg_len)], axis=-1)
-        elif scoring == "rmse":
-            scores = np.stack([_rmse_multifeat(yhat[..., a], ytrue) for a in range(reg_len)], axis=-1)
-        elif scoring == "R2":
-            scores = np.stack([_r2_multifeat(yhat[..., a], ytrue) for a in range(reg_len)], axis=-1)
-        elif scoring == "rankcorr":
-            scores = np.stack([_rankcorr_multifeat(yhat[..., a], ytrue, nchans=self.n_chans_) for a in range(reg_len)], axis=-1)
-        elif scoring == "ezekiel":
-            # window_length not meaningful here; keep parity with your function signature
-            window_length = Xtest.shape[1]
-            scores = np.stack([_ezr2_multifeat(yhat[..., a], ytrue, Xtest, window_length) for a in range(reg_len)], axis=-1)
-        elif scoring == "adj_R2":
-            # needs Xtrain to compute adjusted R2; use provided Xtrain
-            if Xtrain is None:
-                raise ValueError("adj_R2 requires Xtrain.")
-            # no lags in RRR, so pass lags=None
-            scores = np.stack([_adjr2_multifeat(yhat[..., a], ytrue, Xtrain, Xtest, self.alpha[a], lags=None) for a in range(reg_len)], axis=-1)
+        lags = self.lags
+        if scoring == 'corr':
+            scores = pearsonr(ytrue, yhat)[0]
+            self.scores = scores
+            return scores
+        elif scoring == 'rmse':
+            scores = root_mean_squared_error(ytrue, yhat, multioutput='raw_values')
+            self.scores = scores
+            return scores
+        elif scoring == 'R2':
+            scores = r2_score(ytrue, yhat, multioutput='raw_values')
+            self.scores = scores
+            return scores
         else:
-            raise NotImplementedError("Valid scoring: corr, rankcorr, rmse, R2, ezekiel, adj_R2")
+            raise NotImplementedError(
+                "Only correlation & RMSE scores are valid for now...")
 
-        self.scores = scores
-        return scores
-
-    def xval_eval(
-        self,
-        X,
-        y,
-        n_splits=5,
-        drop=True,
-        train_full=True,
-        scoring="R2",
-        segment_length=None,
-        verbose=True,
-    ):
+    def xval_eval(self, X, y, n_splits=5, lagged=False, drop=True, train_full=True, scoring="R2", segment_length=None, fit_mode='direct', verbose=True):
         """
-        Cross-validation over time samples (KFold) like TRFEstimator.xval_eval.
-        Returns scores with shape:
-            - if segment_length is None: (n_splits, n_chans, n_alpha)
-            - else: (n_splits, n_segments, n_chans, n_alpha)
+        Standard cross-validation. Scoring. 
+        
+        Parameters
+        ----------
+        X : ndarray 
+            input of size (T x nfeats)
+        y : ndarray 
+            output of size (T x nchans)
+        n_splits : integer 
+            Number of folds, default to 5.
+        lagged : bool
+            Whether the X matrix has been previously 'lagged', default to False.
+        drop : bool
+            Whether to drop non valid samples (if False, non valid sample are filled with 0.).
+        train_full : bool 
+            Train model using all the available data after the end of x-val
+        scoring : string
+            Scoring method (see scoring()), default to "R2".
+        segment_length: integer, float 
+            Length of a testing segments (that testing data will be chopped into). If None, use all the available data. Default to None.
+        fit_mode : string {'direct' | 'from_cov_xxx'} (default: 'direct')
+            Model training mode. 'direct' - fit using all the avaiable data at once (i.e. fit()), 'from_cov_xxx' - fit using all the avaiable data from covariance matrices. The routine will chop data into pieces, compute piece-wise cov matrices and fit the model. 'xxx' portion of the string indicates the lenght of the segments that the data will be chopped into. 
+        verbose : bool
+        
+        Returns
+        -------
+        scores : ndarray 
+            scores across each fold (n_splits x segments x nchans x alpha)
         """
-        X = np.asarray(X)
-        y = np.asarray(y)
 
-        if segment_length is not None:
-            segment_length = int(segment_length)
+        #if np.ndim(self.alpha) < 1 or len(self.alpha) <= 1:
+        #    raise ValueError(
+        #        "Supply several alphas to TRF constructor to use this method.")
 
-        self.n_feats_ = X.shape[1]
+        if segment_length:
+            segment_length = segment_length*self.srate  # time to samples
+
+        self.fill_lags()
+
+        self.n_feats_ = X.shape[1] if not lagged else X.shape[1] // len(
+            self.lags)
         self.n_chans_ = y.shape[1] if y.ndim == 2 else y.shape[2]
-        reg_len = len(self.alpha)
 
-        kf = KFold(n_splits=n_splits, shuffle=False)
-
+        kf = KFold(n_splits=n_splits)
         if segment_length:
             scores = []
         else:
-            scores = np.zeros((n_splits, self.n_chans_, reg_len))
+            scores = np.zeros((n_splits, self.n_chans_))
 
         for kfold, (train, test) in enumerate(kf.split(X)):
             if verbose:
-                print(f"Training/Evaluating fold {kfold+1}/{n_splits}")
+                print("Training/Evaluating fold %d/%d" % (kfold+1, n_splits))
 
-            # Fit on this fold
-            self.fit(X[train, :], y[train, :], drop=drop)
+            self.fit(X[train, :], y[train, :])
 
-            if segment_length:
-                if (len(test) % segment_length) > 0:
+            if segment_length:  # Chop testing data into smaller pieces
+
+                if (len(test) % segment_length) > 0:  # Crop if there are some odd samples
                     test_crop = test[:-int(len(test) % segment_length)]
                 else:
                     test_crop = test[:]
-                test_segments = test_crop.reshape(int(len(test_crop) / segment_length), -1)
 
-                ccs = [
-                    self.score(X[test_segments[i], :], y[test_segments[i], :], scoring=scoring, Xtrain=X[train, :])
-                    for i in range(test_segments.shape[0])
-                ]
+                # Reshape to # segments x segment duration
+                test_segments = test_crop.reshape(
+                    int(len(test_crop) / segment_length), -1)
+
+                ccs = [self.score(X[test_segments[i], :], y[test_segments[i], :], scoring=scoring, Xtrain = X[train, :]) for i in range(
+                    test_segments.shape[0])]  # Evaluate each segment
+
                 scores.append(ccs)
-            else:
-                scores[kfold, :] = self.score(X[test, :], y[test, :], scoring=scoring, Xtrain=X[train, :])
+            else:  # Evaluate using the entire testing data
+                scores[kfold, :] = self.score(X[test, :], y[test, :], scoring=scoring, Xtrain = X[train, :])
 
         if segment_length:
             scores = np.asarray(scores)
@@ -357,46 +347,158 @@ class RRREstimator(BaseEstimator):
         if train_full:
             if verbose:
                 print("Fitting full model...")
-            self.fit(X, y, drop=drop)
-
+            self.fit(X, y)
         self.scores = scores
+
         return scores
 
-    def get_best_alpha(self):
+
+
+
+    def plot_score(self, figax = None, figsize = (5,5), color_type = 'rainbow', 
+                   channels = [], title = 'R2 sumary', minscore = -np.inf):
         """
-        Return best alpha index per channel based on mean CV score (like TRFEstimator).
+        Plot the score according to the regularization parameters.
+
+        Parameters
+        ----------
+        figax : tuple
+            contains (fig,ax) matplotlib object, if existing, the dimensions should fit. If None, create a new figure.
+        figsize : tuple
+            (x,y) size of figure
+        color_type : str
+            cmap to use
+        channels : list
+            Select a list of channels indices to plot. If empty, all channels are taken into account.
+        title : str
+            title of figure
+        minscore : float
+            Only plot channels that have a score above this value
+
+        Returns
+        -------
+        fig : Figure
+            Matplotlib figure object
+        ax : Axes
+            Matplotlib axis/axes
         """
-        if self.scores is None:
-            raise RuntimeError("Run xval_eval() first to populate self.scores.")
-        best_alpha = np.zeros(self.n_chans_, dtype=int)
-        if self.scores.ndim == 3:
-            # folds x chans x alpha
-            mean_scores = np.mean(self.scores, axis=0)  # chans x alpha
-            best_alpha = np.argmax(mean_scores, axis=-1)
-        elif self.scores.ndim == 4:
-            # folds x segments x chans x alpha
-            mean_scores = np.mean(self.scores, axis=(0, 1))  # chans x alpha
-            best_alpha = np.argmax(mean_scores, axis=-1)
+        if figax == None:
+            fig,ax = plt.subplots(figsize = figsize)
         else:
-            raise ValueError(f"Unexpected scores shape: {self.scores.shape}")
-        return best_alpha
+            fig,ax = figax
+        if len(channels) == 0:
+            channels = np.arange(self.scores.shape[1])
+
+        #Extract Coef
+        color_map = dict()
+        for index_channel in range(self.scores.shape[1]):
+            color_map[index_channel] = cmaps[color_type](index_channel/self.scores.shape[1])
+
+        for index_channel in range(self.scores.shape[1]):
+            score_chan = np.mean(self.scores[:,index_channel,:],axis = 0)
+            if np.max(score_chan > minscore):
+                ax.plot(self.alpha, score_chan, color = color_map[index_channel], linewidth = 1.5, label = channels[index_channel])
+        ax.set_title(title)
+        ax.set_xlabel('Alpha')
+        ax.set_ylabel('R2')
+        ax.set_xticks(self.alpha)
+        ax.set_xscale('log')
+        ax.plot(self.alpha, np.mean(self.scores[:,:,:],axis = (0,1)), color = 'k', linewidth = 3, linestyle = '--')
+        ax.legend()
+
+
+        return fig, ax
+
+    def plot_kernel(self, figax = None, figsize = False, color_type = 'rainbow', center_line = False,
+                    channels = None, features = None, title = 'kernel sumary', minR2 = -np.inf):
+        """
+        Plot the TRF of the feature requested as a butterfly plot.
+        
+        Parameters
+        ----------
+        figax : tuple
+            contains (fig,ax) matplotlib object, if existing, the dimensions should fit. If None, create a new figure.
+        figsize : tuple
+            (x,y) size of figure
+        color_type : str
+            cmap to use
+        center_line : bool
+            Whether to plot a line marking the time 0 (i.e. when input and output are in sync)
+        channels : list
+            Select a list of channels indices to plot. If empty, all channels are taken into account.
+        features : list
+            Select a list of features indices to plot. If empty, all features are taken into account.
+        title : str
+            title of figure
+        minscore : float
+            Only plot channels that have a score above this value
+
+        Returns
+        -------
+        fig : Figure
+            Matplotlib figure object
+        ax : Axes
+            Matplotlib axis/axes
+        """
+        
+        if not figsize:
+            figsize = (15, (self.n_feats_) * 4)
+        if figax is None:
+            fig,ax = plt.subplots(self.n_feats_,figsize = figsize, sharex = True)
+        else:
+            fig,ax = figax
+        if channels == None:
+            channels = np.arange(self.n_chans_)
+        if features == None:
+            features = np.arange(self.n_feats_)
+
+
+        color_map = dict()
+        for index_channel in range(self.n_chans_):
+            color_map[index_channel] = cmaps[color_type](index_channel/self.n_chans_)
+
+        best_alpha = self.get_best_alpha()
+        for feat_index in range(self.n_feats_):
+            feat = features[feat_index]
+            if self.n_feats_ > 1:
+                axfeat = ax[feat_index]
+            else:
+                axfeat = ax
+            for chan_index in range(self.n_chans_):
+                alpha_index = best_alpha[chan_index]
+                chan = channels[chan_index]
+                score_chan = np.mean(self.scores[:,chan_index,:],axis = 0)
+                if np.max(score_chan > minR2):
+
+                    axfeat.plot(self.times, self.get_coef()[:,feat_index,chan_index, alpha_index], color = color_map[chan_index], linewidth = 1.5, label = chan)
+                    axfeat.set_xlabel('Time (s)')
+                    axfeat.set_ylabel(feat)
+            if center_line:
+                axfeat.plot([0,0],[np.min(self.get_coef()[:,feat_index,:, alpha_index]),np.max(self.get_coef()[:,feat_index,:, alpha_index])], color = 'k', linewidth = 1.5, linestyle = '--')
+        handles, labels = axfeat.get_legend_handles_labels()
+        fig.legend(handles, labels, bbox_to_anchor=(1.15, 0.8),loc='right')
+        if self.n_feats_ > 1:
+            ax[0].set_title(title)
+        else:
+            ax.set_title(title)
+        return fig,ax
 
     def __repr__(self):
-        ranks = None
-        if self.rrr_info_ is not None:
-            try:
-                ranks = [int(np.max(info.get("rank", [np.nan]))) if info else None for info in self.rrr_info_]
-            except Exception:
-                ranks = None
-
-        obj = f"""RRRRstimator(
-            alpha={self.alpha},
-            fit_intercept={self.fit_intercept},
-            center_X={self.center_X},
-            center_Y={self.center_Y},
-            n_feats={self.n_feats_},
-            n_chans={self.n_chans_},
-            fitted={self.fitted},
-            last_ranks={ranks}
-        )"""
+        obj = """RRREstimator(
+            lam=%s,
+            srate=%s,
+            tmin=%s,
+            tmax=%s,
+            n_feats=%s,
+            n_chans=%s,
+            n_lags=%s,
+            features : %s,
+            rank: %s,
+            blocks: %s
+        )
+        """ % (self.lam, self.srate, self.tmin, self.tmax,
+               self.n_feats_, self.n_chans_, 
+               len(self.lags) if self.lags is not None else None, str(self.feat_names_),
+               self.rank, self.blocks)
         return obj
+
